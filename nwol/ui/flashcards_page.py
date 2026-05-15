@@ -128,6 +128,8 @@ class FlashcardReviewWidget(tk.Frame):
     def _draw_card(self) -> None:
         if self._canvas is None:
             return
+        if not self._cards or self._index >= len(self._cards):
+            return
         canvas = self._canvas
         for widget in self._card_window_refs:
             try:

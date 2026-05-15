@@ -91,6 +91,15 @@ def update_gauges_from_evaluation(
     values = {}
     for criterion, gauge in gauges.items():
         if criterion == "meta_cognition":
+            # dérive légère pendant la session : monte sur les bonnes réponses,
+            # descend sur les échecs répétés — le score fin de session reste
+            # la mise à jour principale via build_meta_cognition_analysis_prompt.
+            if verdict == "correct":
+                gauge.apply_delta(0.6)
+            elif verdict == "partial":
+                gauge.apply_delta(0.2)
+            elif verdict == "incorrect" and consecutive_incorrect >= 2:
+                gauge.apply_delta(-0.4)
             values[criterion] = gauge.value
             continue
         values[criterion] = gauge.update(
@@ -151,14 +160,12 @@ def _update_attention(
 ) -> float:
     delta = max(-2.0, min(2.0, float(signal))) * 5.0
     if response_time_ms is not None and response_time_ms > 12000:
-        delta -= min(12.0, (response_time_ms - 12000) / 2000.0)
+        delta -= min(6.0, (response_time_ms - 12000) / 2000.0)
     if verdict == "correct":
         delta += 1.0
-    elif verdict == "partial":
-        delta -= 1.0
     elif verdict == "incorrect":
-        delta -= 3.0
-    delta -= max(0, consecutive_incorrect - 1) * 2.0
+        delta -= 2.0
+    delta -= max(0, consecutive_incorrect - 1) * 1.0
     return _clamp(value + delta)
 
 

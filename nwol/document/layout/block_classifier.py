@@ -114,7 +114,7 @@ DISCOURSE_NUMBERED_HEADING_RE = re.compile(
 SEMANTIC_CALLOUT_RE = re.compile(
     r"^(?P<label>définition|definition|déf\.|def\.|théorème|theorem|propriété|property|"
     r"proposition|lemme|lemma|corollaire|corollary|exemple|example|remarque|remark|"
-    r"attention|warning|exercice|exercise)\b(?P<body>.+)$",
+    r"attention|warning|exercice|exercise)(?P<sep>[\s:\.]+)(?P<body>.+)$",
     re.I,
 )
 SEMANTIC_TYPES = {
@@ -562,9 +562,14 @@ def _semantic_callout_type(text: str) -> str | None:
     if not match:
         return None
     body = match.group("body").strip()
-    if len(body.split()) < 4 and not re.search(r"[:.]", body):
+    label = match.group("label").casefold()
+    sep = match.group("sep")
+    # "attention"/"warning" are ambiguous English technical terms: require explicit punctuation
+    if label in {"attention", "warning"} and not re.search(r"[:\.\!]", sep):
         return None
-    return SEMANTIC_TYPES.get(match.group("label").casefold())
+    if len(body.split()) < 4 and not re.search(r"[:.]", body) and not re.search(r"[:.]", sep):
+        return None
+    return SEMANTIC_TYPES.get(label)
 
 
 def _looks_like_sentence_not_heading(text: str) -> bool:

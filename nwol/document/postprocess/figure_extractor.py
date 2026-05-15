@@ -61,7 +61,7 @@ def extract_native_figures(
                             continue
                         seen_occurrences.add(occurrence)
 
-                        _CROP_VERSION = "v2"
+                        _CROP_VERSION = "v3"
                         digest = hashlib.md5(
                             f"{path}-{page_index}-{xref}-{bbox.to_list()}-{_CROP_VERSION}".encode(
                                 "utf-8",
@@ -72,7 +72,7 @@ def extract_native_figures(
                         try:
                             if not image_path.exists():
                                 clip = fitz.Rect(*bbox.to_list())
-                                padding = 8.0
+                                padding = 16.0
                                 clip = fitz.Rect(
                                     max(clip.x0 - padding, page.rect.x0),
                                     max(clip.y0 - padding, page.rect.y0),
@@ -80,7 +80,8 @@ def extract_native_figures(
                                     min(clip.y1 + padding, page.rect.y1),
                                 )
                                 pix = page.get_pixmap(clip=clip, matrix=fitz.Matrix(3, 3), alpha=False)
-                                pix.save(str(image_path))
+                                if not _save_trimmed_figure_pixmap(pix, image_path):
+                                    pix.save(str(image_path))
                             image_path_str = str(image_path)
                         except Exception as exc:
                             logger.debug("Image PDF ignorée p.%s xref=%s: %s", page_index, xref, exc)
@@ -102,6 +103,40 @@ def extract_native_figures(
     except Exception as exc:
         logger.warning("Extraction des images natives échouée: %s", exc)
     return deduplicate_visual_blocks(figures)
+
+
+def _save_trimmed_figure_pixmap(pix, image_path: Path) -> bool:
+    try:
+        from PIL import Image
+        mode = "RGBA" if getattr(pix, "alpha", False) else "RGB"
+        image = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
+        image = _trim_light_background_figure(image, padding=16)
+        image.save(image_path)
+        return True
+    except Exception as exc:
+        logger.debug("Rognage figure ignoré pour %s: %s", image_path, exc)
+        return False
+
+
+def _trim_light_background_figure(image, *, padding: int = 16):
+    try:
+        gray = image.convert("L")
+        mask = gray.point(lambda pixel: 255 if pixel < 248 else 0)
+        bbox = mask.getbbox()
+        if bbox is None:
+            return image
+        left, top, right, bottom = bbox
+        if right - left < 2 or bottom - top < 2:
+            return image
+        left = max(0, left - padding)
+        top = max(0, top - padding)
+        right = min(image.width, right + padding)
+        bottom = min(image.height, bottom + padding)
+        if left == 0 and top == 0 and right == image.width and bottom == image.height:
+            return image
+        return image.crop((left, top, right, bottom))
+    except Exception:
+        return image
 
 
 def deduplicate_visual_blocks(blocks: list[DocumentBlock]) -> list[DocumentBlock]:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import random
 
 import i18n as _i18n
 
@@ -399,14 +400,26 @@ def _question_adaptation(
         }
 
     if attention < 45.0:
+        weights: dict[str, float] = {
+            "qcm": 1.0,
+            "open": 1.0,
+            "comprehension": 1.0,
+            "application": 0.85,
+            "curiosity": 0.8,
+            "visualization": 0.7,
+            "metacognition": 1.8,
+            "anticipation": 1.2,
+        }
+        _apply_recent_penalty(weights, recent_question_types)
+        preferred = _weighted_question_type(weights)
         return {
-            "preferred_type": "metacognition",
+            "preferred_type": preferred,
             "strategy": _t("pause_attention", "attention_break"),
             "attention_break": True,
             "simplify": True,
         }
 
-    weights: dict[str, float] = {
+    weights = {
         "qcm": 1.0,
         "open": 1.0,
         "comprehension": 1.0,
@@ -438,16 +451,18 @@ def _question_adaptation(
         weights["curiosity"] += 3.4
         weights["open"] += 0.4
         strategy = _t("relancer curiosité et créativité", "boost curiosity and creativity")
-    if meta_cognition < 45.0:
-        weights["metacognition"] += 3.4
-        weights["anticipation"] += 0.8
+    if meta_cognition < 38.0:
+        weights["metacognition"] += 1.2
+        weights["anticipation"] += 0.5
         strategy = _t("renforcer la méta-cognition", "strengthen metacognition")
 
-    for index, qtype in enumerate(reversed(recent_question_types[-4:]), start=1):
-        if qtype in weights:
-            weights[qtype] *= 0.18 if index == 1 else 0.45
+    # cap de fréquence : pénalise fortement la métacognition si posée récemment
+    if any(t in ("metacognition", "anticipation") for t in recent_question_types[-2:]):
+        weights["metacognition"] *= 0.12
+        weights["anticipation"] *= 0.25
 
-    preferred = _weighted_question_type(weights, paragraph, recent_question_types)
+    _apply_recent_penalty(weights, recent_question_types)
+    preferred = _weighted_question_type(weights)
     return {
         "preferred_type": preferred,
         "strategy": strategy,
@@ -527,12 +542,16 @@ def _normalize_question_type(value: str | None, valid_types: tuple[str, ...]) ->
     return token if token in valid_types else ""
 
 
-def _weighted_question_type(weights: dict[str, float], paragraph: str, recent_types: list[str]) -> str:
+def _apply_recent_penalty(weights: dict[str, float], recent_question_types: list[str]) -> None:
+    for index, qtype in enumerate(reversed(recent_question_types[-4:]), start=1):
+        if qtype in weights:
+            weights[qtype] *= 0.18 if index == 1 else 0.45
+
+
+def _weighted_question_type(weights: dict[str, float]) -> str:
     items = [(key, max(0.05, float(value))) for key, value in weights.items()]
     total = sum(value for _key, value in items)
-    seed_text = f"{paragraph[:700]}|{'/'.join(recent_types)}"
-    slot = (sum((index + 1) * ord(char) for index, char in enumerate(seed_text)) % 10000) / 10000.0
-    threshold = slot * total
+    threshold = random.random() * total
     cumulative = 0.0
     for key, weight in items:
         cumulative += weight

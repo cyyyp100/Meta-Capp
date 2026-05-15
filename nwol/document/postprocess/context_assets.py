@@ -186,11 +186,31 @@ def _should_display_context_asset(block: DocumentBlock, reason: str) -> bool:
         return True
     if metadata.get("formula_mode") == "ambiguous":
         return True
+    if reason == "inline_math" and _block_has_complex_inline_math(block):
+        return True
     return False
 
 
 def _should_replace_text_with_context_asset(block: DocumentBlock, reason: str) -> bool:
     return reason == "fragmented_math_text" or (block.metadata or {}).get("formula_mode") == "ambiguous"
+
+
+def _block_has_complex_inline_math(block: DocumentBlock) -> bool:
+    """Return True only when the inline math is rich enough that a visual crop adds value."""
+    metadata = block.metadata or {}
+    text = (block.text or block.latex or "").strip()
+    if not text:
+        return False
+    if metadata.get("formula_mode") in {"ambiguous", "display"}:
+        return True
+    math_tokens = len(_MATH_TOKEN_RE.findall(text))
+    if math_tokens >= 4:
+        return True
+    if "$" in text and math_tokens >= 2:
+        return True
+    if re.search(r"\\(?:frac|sum|int|prod|lim|sqrt|begin|matrix)", text):
+        return True
+    return False
 
 
 def _is_unsafe_inline_math_crop_geometry(

@@ -47,7 +47,8 @@ def test_context_asset_display_flag():
     assert _should_show_context_asset(block) is False
 
 
-def test_context_asset_hides_inline_and_math_dense_legacy_flags():
+def test_context_asset_hides_math_dense_shows_inline_with_display_flag():
+    # math_dense_text is always suppressed (would create too much visual clutter)
     block = {
         "type": "paragraph",
         "text": "Texte mathématique déjà lisible",
@@ -57,10 +58,18 @@ def test_context_asset_hides_inline_and_math_dense_legacy_flags():
             "context_asset_reason": "math_dense_text",
         },
     }
+    assert _should_show_context_asset(block) is False
 
-    assert _should_show_context_asset(block) is False
+    # inline_math with context_asset_display=True is now shown (complex inline math crop)
     block["metadata"]["context_asset_reason"] = "inline_math"
+    assert _should_show_context_asset(block) is True
+
+    # inline_math without the display flag stays hidden
+    block["metadata"]["context_asset_display"] = False
     assert _should_show_context_asset(block) is False
+
+    # low_confidence_text is always shown when asset is present
+    block["metadata"]["context_asset_display"] = True
     block["metadata"]["context_asset_reason"] = "low_confidence_text"
     assert _should_show_context_asset(block) is True
 

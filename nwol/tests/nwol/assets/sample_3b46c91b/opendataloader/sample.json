@@ -1,0 +1,29 @@
+{
+  "file name" : "sample.pdf",
+  "number of pages" : 1,
+  "author" : null,
+  "title" : null,
+  "creation date" : null,
+  "modification date" : null,
+  "kids" : [ {
+    "type" : "heading",
+    "id" : 1,
+    "level" : "Doctitle",
+    "page number" : 1,
+    "bounding box" : [ 72.0, 765.5, 164.26, 788.62 ],
+    "heading level" : 1,
+    "font" : "Helvetica",
+    "font size" : 20.0,
+    "text color" : "[0.0]",
+    "content" : "Chapitre 1"
+  }, {
+    "type" : "paragraph",
+    "id" : 2,
+    "page number" : 1,
+    "bounding box" : [ 72.0, 719.525, 487.756, 732.241 ],
+    "font" : "Helvetica",
+    "font size" : 11.0,
+    "text color" : "[0.0]",
+    "content" : "Ce paragraphe de cours contient assez de texte pour etre extrait comme paragraphe."
+  } ]
+}

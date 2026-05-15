@@ -30,7 +30,7 @@ _MAX_READER_CONTEXT_HEIGHT = 190
 _MAX_READER_FIGURE_HEIGHT = 220
 _MAX_READER_FORMULA_WIDTH = 660
 _MAX_READER_FORMULA_HEIGHT = 92
-_MAX_READER_FORMULA_CROP_HEIGHT = 96
+_MAX_READER_FORMULA_CROP_HEIGHT = 200
 _MAX_READER_INLINE_FORMULA_HEIGHT = 42
 _MAX_READER_TABLE_HEIGHT = 260
 
@@ -1771,8 +1771,10 @@ def _should_show_context_asset(block: dict) -> bool:
         return True
     if metadata.get("formula_mode") == "ambiguous":
         return True
-    if reason in {"inline_math", "math_dense_text"}:
+    if reason == "math_dense_text":
         return False
+    if reason == "inline_math":
+        return bool(metadata.get("context_asset_display"))
     if metadata.get("context_asset_display") is True:
         return True
     if reason == "fragmented_math_text":

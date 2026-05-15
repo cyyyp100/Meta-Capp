@@ -484,7 +484,11 @@ def _semantic_heading_type(block: DocumentBlock) -> str | None:
     match = re.match(r"^(?P<label>[A-Za-zÀ-ÿ.]+)(?:\s+\d+(?:\.\d+)*)?$", text, re.I)
     if not match:
         return None
-    return SEMANTIC_PREFIXES.get(match.group("label").casefold())
+    label = match.group("label").casefold()
+    # "attention"/"warning" as standalone headings are section titles in English papers, not callouts
+    if label in {"attention", "warning"}:
+        return None
+    return SEMANTIC_PREFIXES.get(label)
 
 
 def _can_merge_callout_body(heading: DocumentBlock, body: DocumentBlock) -> bool:

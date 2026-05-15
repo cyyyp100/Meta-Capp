@@ -156,9 +156,15 @@ def _trim_formula_bottom_against_text(rect, block: DocumentBlock, blocks: list[D
     return type(rect)(rect.x0, rect.y0, rect.x1, trimmed_y1), True
 
 
+_CITATION_ONLY_RE = re.compile(r"^\$?\s*\[[\d,\s]+\]\.?\s*\$?$")
+
+
 def _should_crop_formula(block: DocumentBlock) -> bool:
     metadata = block.metadata or {}
     if metadata.get("formula_mode") == "inline":
+        return False
+    text = (block.text or block.latex or "").strip()
+    if _CITATION_ONLY_RE.match(text):
         return False
     if metadata.get("render_mode") == "pdf_crop" and metadata.get("formula_mode") == "display":
         return True
@@ -169,7 +175,6 @@ def _should_crop_formula(block: DocumentBlock) -> bool:
     if block.latex and _has_reasonable_formula_bbox(block) and metadata.get("formula_mode") != "inline":
         return True
 
-    text = (block.text or block.latex or "").strip()
     if not text:
         return False
     if "$" in text and text.count("$") != 2:

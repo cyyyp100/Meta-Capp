@@ -20,6 +20,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 from collections import defaultdict
@@ -31,17 +32,22 @@ from document.postprocess.figure_extractor import document_asset_dir
 
 logger = logging.getLogger("Document.llm_page_cropper")
 
-_RENDER_DPI = 72          # low-res render sent to LLM (1 pt ≈ 1 px)
+_RENDER_DPI = 144         # 2× render sent to LLM for better formula detection
 _CROP_ZOOM = 3.0          # high-res crop factor for final display
 _MIN_CONFIDENCE = 0.60
 _FORMULA_TYPES = {"formula", "paragraph", "text", "definition", "theorem", "example", "remark"}
 _VISUAL_TYPES = {"figure", "table", "formula"}
+_LLM_CROP_OPTIONS = {
+    "num_ctx": 8192,
+    "num_predict": 2048,
+    "temperature": 0.1,
+}
 _PROMPT = """\
 Tu es un analyseur de mise en page de document PDF scientifique.
-Je te montre une page complète du PDF (résolution basse, environ 72 DPI).
+Je te montre une page complète du PDF (résolution standard, environ 144 DPI).
 
 Coordonnées : les bboxes ci-dessous et dans ta réponse sont en **points PDF** \
-(origine coin haut-gauche). À 72 DPI, 1 point ≈ 1 pixel.
+(origine coin haut-gauche). Les coordonnées sont indépendantes de la résolution de l'image.
 Dimensions de la page : {width:.0f} × {height:.0f} points.
 
 Blocs déjà extraits sur cette page :
@@ -320,8 +326,17 @@ def _do_crop(
 
 
 def _parse_llm_response(raw: str) -> dict[str, list]:
-    """Parse LLM JSON, tolerating wrapped responses."""
-    for attempt in [raw, raw[raw.find("{"):raw.rfind("}") + 1] if "{" in raw else ""]:
+    """Parse LLM JSON, tolerating markdown code fences and wrapped responses."""
+    stripped = re.sub(r"^```(?:json)?\s*", "", (raw or "").strip(), flags=re.IGNORECASE)
+    stripped = re.sub(r"\s*```$", "", stripped.strip())
+
+    candidates = [stripped, raw]
+    if "{" in raw:
+        candidates.append(raw[raw.find("{"):raw.rfind("}") + 1])
+
+    for attempt in candidates:
+        if not attempt:
+            continue
         try:
             data = json.loads(attempt)
             if isinstance(data, dict):
@@ -347,6 +362,7 @@ def _call_ollama(
         "format": "json",
         "images": images,
         "keep_alive": keep_alive,
+        "options": _LLM_CROP_OPTIONS,
     }).encode()
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
