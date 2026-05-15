@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS flashcards (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id        INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
     question_id    INTEGER REFERENCES questions(id) ON DELETE SET NULL,
+    session_id     INTEGER REFERENCES reading_sessions(id) ON DELETE SET NULL,
     document_id    INTEGER REFERENCES documents(id) ON DELETE SET NULL,
     chapter_id     INTEGER REFERENCES chapters(id) ON DELETE SET NULL,
     front          TEXT NOT NULL,

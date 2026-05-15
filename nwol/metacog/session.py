@@ -214,11 +214,10 @@ def _count_flashcards_from_session_questions(session_id: int) -> int:
     row = conn.execute(
         """SELECT COUNT(*) AS n
            FROM flashcards
-           WHERE question_id IN (
-             SELECT DISTINCT question_id
-             FROM answers
-             WHERE session_id=? AND question_id IS NOT NULL
-           )""",
-        (session_id,),
+           WHERE session_id=?
+              OR question_id IN (
+                SELECT id FROM questions WHERE session_id=?
+              )""",
+        (session_id, session_id),
     ).fetchone()
     return int(row["n"]) if row else 0

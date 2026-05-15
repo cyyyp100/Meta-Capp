@@ -50,7 +50,7 @@ DEFAULT_PAGES_PER_CHAPTER = 10
 
 # Base de données
 DB_PATH = str(_PROJECT_ROOT / "data" / "nwol.db")
-DB_SCHEMA_VERSION = 14
+DB_SCHEMA_VERSION = 15
 
 # Logs
 LOG_FILE = str(_PROJECT_ROOT / "logs" / "nwol.log")

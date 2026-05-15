@@ -79,6 +79,11 @@ def run_migrations(conn) -> None:
         _set_version(conn, 14)
         current = 14
 
+    if current < 15 <= TARGET_SCHEMA_VERSION:
+        _migrate_to_v15(conn)
+        _set_version(conn, 15)
+        current = 15
+
     if current < TARGET_SCHEMA_VERSION:
         _set_version(conn, TARGET_SCHEMA_VERSION)
 
@@ -407,6 +412,12 @@ def _migrate_to_v14(conn) -> None:
     logger.info("Migration SQLite v14 démarrée")
     _ensure_column(conn, "user", "lang", "TEXT NOT NULL DEFAULT 'fr'")
     logger.info("Migration SQLite v14 terminée")
+
+
+def _migrate_to_v15(conn) -> None:
+    logger.info("Migration SQLite v15 démarrée")
+    _ensure_column(conn, "flashcards", "session_id", "INTEGER REFERENCES reading_sessions(id) ON DELETE SET NULL")
+    logger.info("Migration SQLite v15 terminée")
 
 
 def _ensure_subject_history_table(conn) -> None:

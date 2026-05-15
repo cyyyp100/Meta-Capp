@@ -436,6 +436,7 @@ class AdaptiveCompanion:
             source="auto",
             document_id=self.paragraph.doc_id,
             chapter_id=self.paragraph.chapter_id,
+            session_id=self.session_id,
             asset_paths=self.paragraph.image_paths,
         )
 

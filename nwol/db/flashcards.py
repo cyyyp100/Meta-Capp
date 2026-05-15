@@ -25,6 +25,7 @@ def save_flashcard(
     source: str = "auto",
     document_id: int | None = None,
     chapter_id: int | None = None,
+    session_id: int | None = None,
     asset_paths: list[str] | None = None,
 ) -> int:
     ensure_default_user()
@@ -36,12 +37,13 @@ def save_flashcard(
     with conn:
         cur = conn.execute(
             """INSERT INTO flashcards
-               (user_id, question_id, document_id, chapter_id, front, back,
+               (user_id, question_id, session_id, document_id, chapter_id, front, back,
                 tags, assets_json, difficulty, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 user_id or DEFAULT_USER_ID,
                 question_id,
+                session_id,
                 document_id,
                 chapter_id,
                 front.strip(),
