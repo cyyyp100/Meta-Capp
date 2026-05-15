@@ -1,14 +1,21 @@
-# requirements.txt — MetaC-App v1.3
-# Obligatoires
+# NWOL — Python dependencies
+# Python 3.10+ required
+# All LLM inference is handled locally via Ollama (no API key needed)
+
+# PDF parsing and geometry extraction
 PyMuPDF>=1.23.0
+
+# Image processing (figure extraction, display, LaTeX rendering)
 Pillow>=10.0.0
+
+# LaTeX formula rendering (matplotlib's mathtext engine)
 matplotlib>=3.8.0
 
-# Mode "Article scientifique" (optionnel — lourd, ~2 Go de modèles)
-# marker-pdf>=1.6.0
+# Testing
+pytest>=8.0.0
 
-# Backend PDF principal recommandé (optionnel ; nécessite Java 11+)
+# Optional: high-level document structure analysis (requires Java 11+)
 # opendataloader-pdf>=0.0.4
 
-# Développement / tests
-pytest>=8.0.0
+# Optional: alternative PDF extraction engine (~2 GB models)
+# marker-pdf>=1.6.0
