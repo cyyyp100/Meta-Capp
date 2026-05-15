@@ -1,0 +1,14 @@
+# requirements.txt — MetaC-App v1.3
+# Obligatoires
+PyMuPDF>=1.23.0
+Pillow>=10.0.0
+matplotlib>=3.8.0
+
+# Mode "Article scientifique" (optionnel — lourd, ~2 Go de modèles)
+# marker-pdf>=1.6.0
+
+# Backend PDF principal recommandé (optionnel ; nécessite Java 11+)
+# opendataloader-pdf>=0.0.4
+
+# Développement / tests
+pytest>=8.0.0
