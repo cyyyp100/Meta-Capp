@@ -20,7 +20,7 @@ _PROSE_WORD_RE = re.compile(r"\b[A-Za-zÀ-ÿ]{3,}\b")
 _MATH_WORD_RE = re.compile(r"\b(?:ln|log|exp|sin|cos|tan|lim|sqrt|o)\b", re.I)
 _BROKEN_INLINE_LATEX_RE = re.compile(
     r"(?:\\t\s*e\s*x\s*t|\\ma\s*trhm|\\textbf\$\s*\{|\\mathrm\$\s*\{|"
-    r"\$[A-Za-z]_\{[^$]{0,80}\$|\\\s+\\)",
+    r"\$[A-Za-z]_\{[^$}]{0,80}\$|\\\s+\\)",
     re.I,
 )
 _TEXTUAL_TYPES = {
@@ -40,6 +40,29 @@ _REASON_BUDGETS = {
 }
 
 
+_CONTEXT_ASSET_RENDER_MODES = {"context_crop_only", "text_with_context_crop"}
+_CONTEXT_ASSET_META_KEYS = {
+    "context_asset_path",
+    "context_asset_type",
+    "context_asset_reason",
+    "context_asset_display",
+    "context_asset_skipped",
+    "llm_assets",
+}
+
+
+def _clear_stale_context_asset_metadata(blocks: list[DocumentBlock]) -> None:
+    """Strip cached context-asset metadata so each run computes fresh decisions."""
+    for block in blocks:
+        m = block.metadata
+        if not m:
+            continue
+        if m.get("render_mode") in _CONTEXT_ASSET_RENDER_MODES:
+            m.pop("render_mode", None)
+        for key in _CONTEXT_ASSET_META_KEYS:
+            m.pop(key, None)
+
+
 def crop_complex_context_blocks(
     pdf_path: str,
     blocks: list[DocumentBlock],
@@ -51,6 +74,8 @@ def crop_complex_context_blocks(
     The crop is kept in metadata so the reader contract stays unchanged. The
     LLM layer can attach the image to an Ollama multimodal request when useful.
     """
+    _clear_stale_context_asset_metadata(blocks)
+
     try:
         import fitz  # type: ignore
     except Exception as exc:
@@ -146,6 +171,8 @@ def _needs_context_asset(block: DocumentBlock) -> bool:
         return False
     if _looks_like_external_metadata_text(text):
         return False
+    if _looks_like_tabular_numeric_data(text):
+        return False
 
     if _looks_like_fragmented_math_text(block):
         return True
@@ -179,20 +206,45 @@ def _context_asset_reason(block: DocumentBlock) -> str:
 
 
 def _should_display_context_asset(block: DocumentBlock, reason: str) -> bool:
+    """Only display a visual crop when the text is genuinely unreadable.
+
+    inline_math, math_dense_text and low_confidence_text all render acceptably
+    as text (the app supports LaTeX and the text is usually correct enough).
+    Showing a duplicate image crop alongside them causes visual doubling.
+    Only fragmented/ambiguous math warrants replacing text with a crop.
+    """
     metadata = block.metadata or {}
     if metadata.get("context_asset_display") is False:
         return False
-    if reason in {"low_confidence_text", "fragmented_math_text"}:
+    if _block_is_too_large_for_crop(block):
+        return False
+    # Only display when the text is too broken to render properly
+    if reason == "fragmented_math_text":
         return True
     if metadata.get("formula_mode") == "ambiguous":
-        return True
-    if reason == "inline_math" and _block_has_complex_inline_math(block):
         return True
     return False
 
 
 def _should_replace_text_with_context_asset(block: DocumentBlock, reason: str) -> bool:
+    if _block_is_too_large_for_crop(block):
+        return False
     return reason == "fragmented_math_text" or (block.metadata or {}).get("formula_mode") == "ambiguous"
+
+
+def _block_is_too_large_for_crop(block: DocumentBlock) -> bool:
+    """Return True if the block covers too large an area to be usefully shown as a crop image.
+
+    A block spanning many lines is normal prose — displaying it as an image
+    adds no value and creates visual confusion alongside the text rendering.
+    Threshold: bbox height > 120pt (≈ 4–5 lines) or text > 400 chars.
+    """
+    text = (block.text or block.latex or "").strip()
+    if len(text) > 400:
+        return True
+    if block.bbox is not None and block.bbox.height > 120.0:
+        return True
+    return False
 
 
 def _block_has_complex_inline_math(block: DocumentBlock) -> bool:
@@ -238,6 +290,18 @@ def _is_unsafe_inline_math_crop_geometry(
     return block.bbox.width >= 430.0
 
 
+def _looks_like_tabular_numeric_data(text: str) -> bool:
+    """Return True when the text is pure numeric row data (e.g. table cells)."""
+    if not text:
+        return False
+    numbers = re.findall(r"\d+(?:\.\d+)?", text)
+    if len(numbers) < 4:
+        return False
+    if len(re.findall(r"[A-Za-zÀ-ÿ]", text)) > 2:
+        return False
+    return "$" not in text and "\\" not in text
+
+
 def _looks_like_fragmented_math_text(block: DocumentBlock) -> bool:
     metadata = block.metadata or {}
     if metadata.get("is_metadata"):
@@ -249,6 +313,8 @@ def _looks_like_fragmented_math_text(block: DocumentBlock) -> bool:
     if not text:
         return False
     if _looks_like_external_metadata_text(text):
+        return False
+    if _looks_like_tabular_numeric_data(text):
         return False
 
     if text.count("$") % 2 == 1:
@@ -265,7 +331,10 @@ def _looks_like_fragmented_math_text(block: DocumentBlock) -> bool:
     )
     math_tokens = len(_MATH_TOKEN_RE.findall(text))
     math_tokens += len(_MATH_WORD_RE.findall(text))
-    math_tokens += len(re.findall(r"\d", text))
+    # Only count bare digits as math signal when real math markers are present;
+    # without them, digit-heavy text (e.g. bibliography pages/years) is not math.
+    if "$" in text or "\\" in text or math_tokens >= 2:
+        math_tokens += len(re.findall(r"\d", text))
     prose_words = len(_PROSE_WORD_RE.findall(text))
 
     if (

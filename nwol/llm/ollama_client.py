@@ -1743,6 +1743,7 @@ def _call_ollama(prompt: str, model: str, images: list[str] | None = None, optio
         "model": model,
         "prompt": prompt,
         "stream": False,
+        "think": False,
         "format": "json",
         "options": options if options is not None else OLLAMA_OPTIONS,
         "keep_alive": OLLAMA_KEEP_ALIVE,
@@ -1806,6 +1807,7 @@ def _stream_ollama_response(prompt: str, model: str, images: list[str] | None, o
         "model": model,
         "prompt": prompt,
         "stream": True,
+        "think": False,
         "options": options if options is not None else OLLAMA_OPTIONS,
         "keep_alive": OLLAMA_KEEP_ALIVE,
     }

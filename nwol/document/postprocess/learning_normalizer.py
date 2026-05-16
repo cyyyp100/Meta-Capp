@@ -53,10 +53,14 @@ _NUMBERED_HEADING_RE = re.compile(
 )
 _EMBEDDED_NUMBERED_HEADING_RE = re.compile(
     r"^\s*(?P<number>\d+(?:\.\d+)+|[A-Z](?:\.\d+)+|[A-Z]\.)(?:\.)?(?:\s+|(?=[A-Za-zÀ-ÿ]))"
-    r"(?P<label>[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9'’(),:;/\-\s]{2,110}?)\s+"
+    r"(?P<label>[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9’’(),:;/\-\s]{2,110}?)\s+"
     r"(?P<body>(?:We|This|These|The|A|An|In|Here|Our|To|For|As|However|Although|Given|It|They|"
-    r"From|Nous|Cette|Ces|Le|La|Les|Dans|Pour|Ainsi|Cependant)\b.+)$",
+    r"From|Nous|Cette|Ces|Le|La|Les|Dans|Pour|Ainsi|Cependant)\b.+|[A-Z][a-z]+:\s.+)$",
     re.I,
+)
+# Detects a section number that appears mid-paragraph (after a sentence boundary).
+_MID_PARA_SECTION_RE = re.compile(
+    r"(?<=[.!?])\s+(\d+(?:\.\d+)+\.?\s+[A-Z][A-Za-zÀ-ÿ])",
 )
 _DISCOURSE_NUMBERED_HEADING_RE = re.compile(
     r"^\s*(?:\d+(?:\.\d+)+|[A-Z](?:\.\d+)+|[A-Z]\.)\.?\s+"
@@ -69,6 +73,7 @@ _SHORT_TEXT_LABEL_RE = re.compile(r"^[A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9'’(),.:;\-
 
 def normalize_for_learning(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
     blocks = split_overextended_numbered_headings(blocks)
+    blocks = split_mid_paragraph_section_headings(blocks)
     blocks = promote_numbered_paragraph_headings(blocks)
     blocks = assign_stable_ids(blocks)
     blocks = fix_wrong_formula_blocks(blocks)
@@ -76,6 +81,76 @@ def normalize_for_learning(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
     blocks = merge_semantic_heading_callouts(blocks)
     blocks = compute_block_confidence(blocks)
     return blocks
+
+
+def split_mid_paragraph_section_headings(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
+    """Split paragraphs that have a numbered section heading embedded mid-text.
+
+    Example: "...respectively. 3.1 Encoder and Decoder Stacks Encoder: The encoder..."
+    becomes three blocks: paragraph / heading / paragraph.
+    """
+    result: list[DocumentBlock] = []
+    for block in blocks:
+        if block.type not in {"paragraph", "text"} or not block.text:
+            result.append(block)
+            continue
+
+        text = block.text.strip()
+        match = _MID_PARA_SECTION_RE.search(text)
+        if not match:
+            result.append(block)
+            continue
+
+        # Position right after the sentence-ending punctuation
+        sentence_end_pos = match.start() + 1  # after the [.!?]
+        suffix_start = match.start(1)          # start of "3.1 ..."
+
+        pre_text = text[:sentence_end_pos].strip()
+        suffix = text[suffix_start:].strip()
+
+        if not pre_text or not suffix:
+            result.append(block)
+            continue
+
+        # Try to detect heading+body within the suffix
+        suffix_block = DocumentBlock(
+            type=block.type,
+            text=suffix,
+            page=block.page,
+            bbox=block.bbox,
+            confidence=block.confidence,
+            metadata=dict(block.metadata),
+        )
+        split = _split_numbered_heading_body(suffix_block, suffix)
+        if split is None:
+            # Suffix might be heading-only (no body): promote if it looks like a heading
+            if _looks_like_numbered_paragraph_heading(suffix):
+                pre_block = DocumentBlock(
+                    type="paragraph", text=pre_text, page=block.page,
+                    bbox=block.bbox, confidence=block.confidence,
+                    metadata=dict(block.metadata),
+                )
+                heading_block = DocumentBlock(
+                    type="heading", text=_normalize_numbered_heading_text(suffix) or suffix,
+                    page=block.page, bbox=block.bbox,
+                    level=_heading_level_from_numbering(suffix),
+                    confidence=min(block.confidence, 0.86),
+                    metadata={**block.metadata, "detected_as": "heading", "promoted_from": block.type},
+                )
+                result.extend([pre_block, heading_block])
+            else:
+                result.append(block)
+            continue
+
+        pre_block = DocumentBlock(
+            type="paragraph", text=pre_text, page=block.page,
+            bbox=block.bbox, confidence=block.confidence,
+            metadata=dict(block.metadata),
+        )
+        result.append(pre_block)
+        result.extend(split)
+
+    return result
 
 
 def split_overextended_numbered_headings(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
@@ -420,6 +495,9 @@ def _looks_like_embedded_heading_body(body: str) -> bool:
         return False
     if clean[:1].islower():
         return False
+    # Labeled paragraph starter: "Encoder: The encoder...", "Decoder: The decoder..."
+    if re.match(r"[A-Z][a-zA-ZÀ-ÿ]+:\s", clean):
+        return True
     first_words = " ".join(clean.split()[:10]).casefold()
     if re.search(
         r"\b(can|may|must|should|will|is|are|was|were|means|depends|represents?|describes?|"

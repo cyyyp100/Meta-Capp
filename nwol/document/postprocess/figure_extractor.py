@@ -61,7 +61,7 @@ def extract_native_figures(
                             continue
                         seen_occurrences.add(occurrence)
 
-                        _CROP_VERSION = "v3"
+                        _CROP_VERSION = "v4"
                         digest = hashlib.md5(
                             f"{path}-{page_index}-{xref}-{bbox.to_list()}-{_CROP_VERSION}".encode(
                                 "utf-8",
@@ -72,13 +72,6 @@ def extract_native_figures(
                         try:
                             if not image_path.exists():
                                 clip = fitz.Rect(*bbox.to_list())
-                                padding = 16.0
-                                clip = fitz.Rect(
-                                    max(clip.x0 - padding, page.rect.x0),
-                                    max(clip.y0 - padding, page.rect.y0),
-                                    min(clip.x1 + padding, page.rect.x1),
-                                    min(clip.y1 + padding, page.rect.y1),
-                                )
                                 pix = page.get_pixmap(clip=clip, matrix=fitz.Matrix(3, 3), alpha=False)
                                 if not _save_trimmed_figure_pixmap(pix, image_path):
                                     pix.save(str(image_path))
@@ -110,7 +103,7 @@ def _save_trimmed_figure_pixmap(pix, image_path: Path) -> bool:
         from PIL import Image
         mode = "RGBA" if getattr(pix, "alpha", False) else "RGB"
         image = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
-        image = _trim_light_background_figure(image, padding=16)
+        image = _trim_light_background_figure(image, padding=4)
         image.save(image_path)
         return True
     except Exception as exc:
