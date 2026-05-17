@@ -506,7 +506,9 @@ def _starts_new_paragraph(
         return True
 
     if _looks_like_column_restart(previous, block, profile):
-        if _looks_like_column_flow_continuation(previous_text, current_text):
+        vertical_regression = previous.bbox.y0 - block.bbox.y0
+        is_deep_column_jump = vertical_regression > max(50.0, profile.line_height * 4.0)
+        if not is_deep_column_jump and _looks_like_column_flow_continuation(previous_text, current_text):
             return False
         return True
 

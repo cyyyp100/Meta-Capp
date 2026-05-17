@@ -8,6 +8,9 @@ _SPACED_TEXT_CMD_RE = re.compile(r"\\t\s+e\s+x\s+t|\\tex\s+t|\\t\s+h\s+(?:e|ta)"
 _ORPHAN_SCRIPT_RE = re.compile(r"^\s*(?:\${1,2})?\s*[_^]\{")
 _EMPTY_SCRIPT_RUN_RE = re.compile(r"(?:\^\{\s*\}\s*\^|_\{\s*\}\s*_|_\{\s*['`]?_\{\s*\}\})")
 _BROKEN_COMMAND_WITH_WORD_RE = re.compile(r"\\\s+[A-Za-z]\s+[A-Za-z](?:\s+[A-Za-z])?")
+_SINGLE_EMPTY_SCRIPT_RE = re.compile(r"[A-Za-z0-9]\s*[_^]\{\s*\}")
+_WORD_FRAGMENT_SUBSCRIPT_RE = re.compile(r"[_^]\{[A-Za-z]{5,}\}")
+_NAKED_DOLLAR_MID_FORMULA_RE = re.compile(r"[A-Za-z0-9]\$[A-Za-z]")
 
 
 def strip_formula_delimiters(text: str | None) -> str:
@@ -45,6 +48,18 @@ def latex_looks_corrupt(text: str | None) -> bool:
     commands = re.findall(r"\\([A-Za-z]+)", value)
     if any(len(command) == 1 for command in commands) and _BROKEN_COMMAND_WITH_WORD_RE.search(value):
         return True
+
+    if _SINGLE_EMPTY_SCRIPT_RE.search(value):
+        return True
+    if _NAKED_DOLLAR_MID_FORMULA_RE.search(value):
+        return True
+    if _WORD_FRAGMENT_SUBSCRIPT_RE.search(value) and (
+        _SINGLE_EMPTY_SCRIPT_RE.search(value)
+        or _NAKED_DOLLAR_MID_FORMULA_RE.search(value)
+        or abs(value.count("{") - value.count("}")) >= 1
+    ):
+        return True
+
     return False
 
 

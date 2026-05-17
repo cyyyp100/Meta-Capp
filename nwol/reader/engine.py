@@ -71,6 +71,7 @@ class ReadingEngine:
         on_paragraph_complete: Callable[[Block, Callable[[], None]], None] | None = None,
         on_math_paragraph: Callable[[Block, Callable[[str | None], None]], None] | None = None,
         on_section_complete: Callable[[list, "Block | None", bool, Callable[[], None]], None] | None = None,
+        on_figure_schema: Callable[[Block, Callable[[], None]], None] | None = None,
         # on_prefetch_question gardé pour compatibilité mais ignoré
         on_prefetch_question: Callable[[Block], None] | None = None,
     ):
@@ -81,7 +82,11 @@ class ReadingEngine:
         self.on_paragraph_complete = on_paragraph_complete
         self.on_math_paragraph = on_math_paragraph
         self.on_section_complete = on_section_complete
+        self.on_figure_schema = on_figure_schema
         self.schedule = schedule_fn
+        self.slides_mode: bool = False
+        self.on_slide_page_change: Callable[[int, Callable[[], None]], None] | None = None
+        self._last_slide_page: int = 0
         self._pending_id: Any | None = None
         self._in_tick = False
         # Section courante
@@ -177,6 +182,19 @@ class ReadingEngine:
             self._schedule_next()
             return
         btype = block.get("type", "paragraph")
+
+        # Slides mode: pause on each new page, skip same-page blocks
+        if self.slides_mode:
+            page = block.get("page_number") or block.get("page") or block.get("page_start")
+            if page is not None and self.on_slide_page_change is not None:
+                page_int = int(page)
+                if page_int != self._last_slide_page:
+                    self._last_slide_page = page_int
+                    self._pause_for_slide_page_change(page_int)
+                    return
+            self._skip_current_block()
+            self._schedule_next()
+            return
 
         # Frontière de section : heading rencontré après du contenu
         if btype in self.HEADING_TYPES and self._current_section_blocks and self.on_section_complete is not None:
@@ -289,6 +307,26 @@ class ReadingEngine:
             self.on_section_complete(section_blocks, heading_block, section_has_latex, _resume)
         except Exception as exc:
             logger.exception("Callback section échoué : %s", exc)
+            _resume()
+
+        if was_in_tick and self.state.is_playing:
+            self._schedule_next()
+
+    def _pause_for_slide_page_change(self, page: int) -> None:
+        self.state.is_playing = False
+        self.state.qa_active = True
+        was_in_tick = self._in_tick
+
+        def _resume() -> None:
+            self.state.qa_active = False
+            self._skip_current_block()
+            if self.state.active_scope is not None:
+                self.play()
+
+        try:
+            self.on_slide_page_change(page, _resume)
+        except Exception as exc:
+            logger.exception("Callback slide_page_change échoué : %s", exc)
             _resume()
 
         if was_in_tick and self.state.is_playing:
@@ -416,7 +454,10 @@ class ReadingEngine:
         else:
             self._add_block_to_section(block)
 
-        self._schedule_next(self._block_pause_ms(block))
+        if btype == "figure" and self.on_figure_schema is not None:
+            self._pause_for_figure_schema(block)
+        else:
+            self._schedule_next(self._block_pause_ms(block))
 
     def _skip_current_block(self) -> None:
         self.state.current_block_index += 1
@@ -455,6 +496,26 @@ class ReadingEngine:
 
         return None
 
+
+    def _pause_for_figure_schema(self, block: Block) -> None:
+        """Pause le moteur le temps que l'analyse LLM du schéma soit streamée."""
+        self.state.is_playing = False
+        self.state.qa_active = True
+        was_in_tick = self._in_tick
+
+        def _resume() -> None:
+            self.state.qa_active = False
+            if self.state.active_scope is not None:
+                self.play()
+
+        try:
+            self.on_figure_schema(block, _resume)
+        except Exception as exc:
+            logger.exception("Callback figure_schema échoué : %s", exc)
+            _resume()
+
+        if was_in_tick and self.state.is_playing:
+            self._schedule_next()
 
     def _finish(self) -> None:
         self.state.is_playing = False

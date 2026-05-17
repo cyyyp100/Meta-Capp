@@ -685,8 +685,22 @@ class InlineReader(tk.Frame):
         self._insert_embedded_frame(frame)
 
     def _insert_paragraph(self, block: dict) -> None:
-        if _should_replace_text_with_context_asset(block) and self.embed_context_asset(block):
-            return
+        if _should_replace_text_with_context_asset(block):
+            text = (block.get("text") or "").strip()
+            context_path = (block.get("metadata") or {}).get("context_asset_path")
+            if text and context_path:
+                # Always route broken blocks through LLM + PDF image crop,
+                # regardless of text length. Suppresses raw crop to avoid doublon.
+                meta = block.setdefault("metadata", {})
+                if isinstance(meta, dict):
+                    meta["context_asset_display"] = False
+                self._insert_math_paragraph_with_llm(block, text)
+                return
+            if self.embed_context_asset(block):
+                return
+            if not text:
+                return
+            # Fall through: no crop — render raw text as best-effort
 
         text = (block.get("text") or "").strip()
         if not text:
@@ -744,11 +758,15 @@ class InlineReader(tk.Frame):
             append_newline_on_complete=True,
         )
 
-    def stream_schema_description(self, block: dict, use_llm: bool = True) -> None:
+    def stream_schema_description(self, block: dict, use_llm: bool = True, on_done=None) -> None:
         if not use_llm:
+            if on_done is not None:
+                self.after(0, on_done)
             return
         image_path = _block_render_image_path(block)
         if not image_path:
+            if on_done is not None:
+                self.after(0, on_done)
             return
         resolved = self._resolve_image_path(image_path)
         if resolved is not None:
@@ -765,6 +783,7 @@ class InlineReader(tk.Frame):
             loading_tag="schema_loading",
             final_tag="schema_description",
             render_async=render_schema_stream_async,
+            on_done=on_done,
         )
 
     def _stream_table_description(self, block: dict) -> None:
@@ -798,6 +817,7 @@ class InlineReader(tk.Frame):
         loading_tag: str,
         final_tag: str,
         render_async,
+        on_done=None,
     ) -> None:
         idx = len(self._paragraph_ranges)
         mark_start = f"_{final_tag}_s_{id(block)}_{idx}"
@@ -852,6 +872,8 @@ class InlineReader(tk.Frame):
 
             self._write(_replace)
             self.scroll_to_bottom()
+            if on_done is not None:
+                self.after(0, on_done)
 
         def _pump() -> None:
             if self._render_generation != generation:
@@ -1184,7 +1206,18 @@ class InlineReader(tk.Frame):
             on_token=_on_token,
             on_complete=_on_complete,
             on_error=_on_error,
+            document_context_before=self._collect_rendered_context_before(),
         )
+
+    def _collect_rendered_context_before(self, max_chars: int = 600) -> str:
+        """Return the last rendered paragraphs' text as LLM document context."""
+        parts = []
+        for record in reversed(self._paragraph_ranges[-6:]):
+            t = (record.get("text") or "").strip()
+            if t:
+                parts.append(t)
+        context = " … ".join(reversed(parts))
+        return context[-max_chars:]
 
     def _math_image_paths(self, block: dict) -> list[str]:
         metadata = block.get("metadata") or {}
@@ -1238,6 +1271,66 @@ class InlineReader(tk.Frame):
         if not image_path:
             return False
         return self._insert_image_file(str(image_path), caption_display=False, max_height=_MAX_READER_CONTEXT_HEIGHT)
+
+    def embed_slide_page(self, page_number: int, on_analysis_complete=None) -> None:
+        """Render a PDF slide page full-width and stream an LLM analysis below it."""
+        self.hide_loading_overlay()
+        if not self._pdf_path or not Path(self._pdf_path).exists():
+            if on_analysis_complete is not None:
+                self.after(0, on_analysis_complete)
+            return
+        try:
+            import fitz
+            from PIL import Image, ImageTk
+
+            tmp_dir = Path(self._pdf_path).parent / ".slide_cache"
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            tmp_path = tmp_dir / f"slide_{abs(hash(self._pdf_path))}_{page_number}.png"
+
+            with fitz.open(self._pdf_path) as doc:
+                if page_number - 1 >= len(doc):
+                    return
+                page = doc[page_number - 1]
+                page_width = float(page.rect.width)
+
+                # High-res crop for LLM (2×)
+                if not tmp_path.exists():
+                    pix_hires = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
+                    pix_hires.save(str(tmp_path))
+
+                # Display render scaled to fill the reading area width
+                available_width = self.text.winfo_width() - 88
+                if available_width <= 8:
+                    available_width = 820
+                scale = available_width / max(1.0, page_width)
+                scale = min(scale, 3.0)
+                pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+                image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+            photo = ImageTk.PhotoImage(image)
+            self._image_refs.append(photo)
+            self._write(lambda i=photo: (
+                self.text.insert(tk.END, "\n", "media"),
+                self.text.image_create(tk.END, image=i, padx=0, pady=4),
+                self.text.insert(tk.END, "\n", "media"),
+            ))
+            self.scroll_to_bottom()
+
+            from llm.ollama_client import render_slide_stream_async
+            self._stream_image_description(
+                block={},
+                image_path=str(tmp_path),
+                caption="",
+                loading_text="Analyse de la slide…",
+                loading_tag="schema_loading",
+                final_tag="schema_description",
+                render_async=render_slide_stream_async,
+                on_done=on_analysis_complete,
+            )
+        except Exception as exc:
+            logger.warning("Rendu slide p.%s impossible : %s", page_number, exc)
+            if on_analysis_complete is not None:
+                self.after(0, on_analysis_complete)
 
     def _insert_formula(self, block: dict) -> None:
         metadata = block.get("metadata") or {}

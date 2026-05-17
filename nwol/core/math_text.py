@@ -9,6 +9,14 @@ _FOMAML_META_GRADIENT_SPLIT_RE = re.compile(
 _FOMAML_META_GRADIENT_PLAIN_RE = re.compile(
     r"\bg\s*FOMAM\s*L\s*=\s*g\s*k\b"
 )
+_BARE_SUBSCRIPT_RE = re.compile(
+    r"(?<!\$)"               # pas déjà dans un dollar
+    r"(?<!\\)"               # pas échappé
+    r"\b([A-Za-z])"          # variable single-lettre
+    r"([_^])"                # subscript ou superscript
+    r"(\{[^{}$\n]{1,40}\})"  # groupe borné, sans dollar ni newline
+    r"(?!\$)"                # pas déjà fermé par dollar
+)
 
 
 def repair_common_inline_math_artifacts(text: str | None) -> str:
@@ -17,7 +25,9 @@ def repair_common_inline_math_artifacts(text: str | None) -> str:
         return ""
 
     repaired = _repair_split_fomaml_meta_gradient(str(text))
-    return _repair_undelimited_fomaml_meta_gradient(repaired)
+    repaired = _repair_undelimited_fomaml_meta_gradient(repaired)
+    repaired = _wrap_bare_subscripts(repaired)
+    return repaired
 
 
 def _repair_split_fomaml_meta_gradient(text: str) -> str:
@@ -91,6 +101,23 @@ def _math_ranges(text: str) -> list[tuple[int, int]]:
         index += 1
 
     return ranges
+
+
+def _wrap_bare_subscripts(text: str) -> str:
+    math_ranges = _math_ranges(text)
+    parts: list[str] = []
+    cursor = 0
+    for match in _BARE_SUBSCRIPT_RE.finditer(text):
+        if any(start <= match.start() < end for start, end in math_ranges):
+            continue
+        content = match.group(3)[1:-1]
+        if content.isdigit() or "@" in content:
+            continue
+        parts.append(text[cursor : match.start()])
+        parts.append(f"${match.group(1)}{match.group(2)}{match.group(3)}$")
+        cursor = match.end()
+    parts.append(text[cursor:])
+    return "".join(parts)
 
 
 def _is_escaped(text: str, index: int) -> bool:

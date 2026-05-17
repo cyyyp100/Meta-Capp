@@ -252,7 +252,7 @@ def raw_lines_to_math_aware_blocks(
 ) -> list[RawBlock]:
     page_sizes = page_sizes or {}
     result: list[RawBlock] = []
-    sorted_lines = sorted(lines, key=lambda line: (line.page, line.bbox.y0, line.bbox.x0))
+    sorted_lines = _sort_lines_column_aware(lines, page_sizes)
 
     i = 0
     while i < len(sorted_lines):
@@ -297,6 +297,30 @@ def raw_lines_to_math_aware_blocks(
 
         i = max(j, i + 1)
 
+    return result
+
+
+def _sort_lines_column_aware(
+    lines: list[RawLine],
+    page_sizes: dict[int, tuple[float, float]],
+) -> list[RawLine]:
+    by_page: dict[int, list[RawLine]] = {}
+    for line in lines:
+        by_page.setdefault(line.page, []).append(line)
+    result: list[RawLine] = []
+    for page in sorted(by_page):
+        page_lines = by_page[page]
+        page_width = page_sizes.get(page, (0.0, 0.0))[0]
+        midpoint = page_width / 2.0 if page_width > 0 else float("inf")
+        left_count = sum(1 for l in page_lines if l.bbox.x0 < midpoint)
+        right_count = sum(1 for l in page_lines if l.bbox.x0 >= midpoint)
+        two_col = page_width > 0 and left_count >= 3 and right_count >= 3
+
+        def sort_key(line: RawLine, _mid: float = midpoint, _two: bool = two_col) -> tuple:
+            col = (1 if line.bbox.x0 >= _mid else 0) if _two else 0
+            return (col, line.bbox.y0, line.bbox.x0)
+
+        result.extend(sorted(page_lines, key=sort_key))
     return result
 
 

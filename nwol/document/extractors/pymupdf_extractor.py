@@ -392,7 +392,7 @@ def _span_gap_suggests_column_split(
 
     left_words = _span_word_count(left_spans)
     right_words = _span_word_count(right_spans)
-    if left_words < 2 or right_words < 2:
+    if left_words < 1 or right_words < 2:
         return False
     return True
 

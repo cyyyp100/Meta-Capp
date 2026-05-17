@@ -1547,6 +1547,25 @@ Règles :
 Réponds uniquement avec la description en texte brut."""
 
 
+def build_slide_analysis_prompt() -> str:
+    return """Tu es un assistant pédagogique qui analyse des slides de cours universitaires.
+
+Une image d'une slide de présentation t'est fournie.
+
+Ta tâche : produire une analyse pédagogique concise de cette slide, destinée à aider un étudiant à comprendre et retenir son contenu.
+
+Règles :
+- Résume le concept principal ou le message clé de la slide en une phrase.
+- Identifie les points importants : définitions, formules, étapes clés, exemples, relations entre concepts.
+- Si la slide contient une formule mathématique, encadre-la dans $...$ (inline) ou $$...$$ (display).
+- Si la slide montre un graphique, un schéma ou un diagramme, décris-en brièvement la structure et ce qu'il illustre.
+- Si la slide est un titre ou une slide de transition, dis-le simplement.
+- Sois concis : 2 à 5 phrases maximum.
+- Texte en français, sans Markdown structuré, sans commentaire avant ou après.
+
+Réponds uniquement avec l'analyse en texte brut."""
+
+
 def build_table_render_prompt(caption: str = "") -> str:
     context = f"\nTitre ou légende du tableau : {caption}" if caption else ""
     return f"""Tu es un expert en lecture de tableaux scientifiques extraits de PDFs.

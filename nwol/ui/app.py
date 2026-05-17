@@ -355,6 +355,7 @@ class NWoLApp(tk.Tk):
             on_paragraph_complete=self.reading_page.on_paragraph_done,
             on_math_paragraph=self.reading_page.on_math_paragraph_start,
             on_section_complete=self.reading_page.on_section_complete,
+            on_figure_schema=self.reading_page.on_figure_schema,
         )
         self._playback = PlaybackController(self._reading_engine, self._state)
 
@@ -955,6 +956,18 @@ class NWoLApp(tk.Tk):
             scope,
             chapter,
             self._doc.filename if self._doc else "",
+        )
+        doc_type = self._current_document_type() or ""
+        # Lightweight visual detection takes priority for slides (image-heavy PDFs
+        # can be mis-classified as "scientific" by the text-keyword pipeline)
+        if doc_type != "slides" and self._doc:
+            if detect_document_type(self._doc.path) == "slides":
+                doc_type = "slides"
+        self.reading_page.set_document_type(doc_type)
+        self._reading_engine.slides_mode = (doc_type == "slides")
+        self._reading_engine._last_slide_page = 0
+        self._reading_engine.on_slide_page_change = (
+            self.reading_page.on_slide_page_change if doc_type == "slides" else None
         )
         self._playback.play()
         self.reading_page.set_play_state(True)

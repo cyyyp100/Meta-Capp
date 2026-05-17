@@ -71,7 +71,58 @@ _BULLET_PREFIX_RE = re.compile(r"^\s*(?:[•▪◦]|\-|\*|\d+[\).]|[A-Za-z][\).]
 _SHORT_TEXT_LABEL_RE = re.compile(r"^[A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9'’(),.:;\-\s/%]+$")
 
 
+_TERMINAL_PUNCT_RE = re.compile(r"[.!?;:]")
+
+
+def filter_figure_label_fragments(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
+    """Remove text blocks that are figure labels leaked into the reading flow.
+
+    Three patterns reliably identify orphaned figure labels:
+    1. Paragraph/heading blocks with height <= 7pt — micro-labels from diagrams.
+    2. Paragraph blocks with width < 130pt, no terminal punctuation, no math —
+       narrow legend items unreadable without their parent figure.
+    3. Table blocks with width < 130pt and no numeric data — these are keyword
+       grids from architecture diagrams, not real data tables; sending them to
+       the table LLM causes hallucination.
+    """
+    result = []
+    for block in blocks:
+        bbox = block.bbox
+        if bbox is None:
+            result.append(block)
+            continue
+        text = (block.text or block.latex or "").strip()
+
+        if block.type in ("paragraph", "heading"):
+            # Drop sub-8pt blocks: only figure micro-labels reach this size.
+            if bbox.height <= 7.0 and len(re.findall(r"\b[A-Za-zÀ-ÿ]{3,}\b", text)) < 5:
+                continue
+            # Drop narrow keyword lists with no sentence structure.
+            if (
+                block.type == "paragraph"
+                and bbox.width < 130.0
+                and not _TERMINAL_PUNCT_RE.search(text)
+                and "$" not in text
+                and "\\" not in text
+                and len(text) > 0
+            ):
+                continue
+
+        elif block.type == "table":
+            # Drop narrow tables with no numeric data — figure legend grids.
+            if (
+                bbox.width < 130.0
+                and not re.search(r"\d", text)
+                and len(text) > 0
+            ):
+                continue
+
+        result.append(block)
+    return result
+
+
 def normalize_for_learning(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
+    blocks = filter_figure_label_fragments(blocks)
     blocks = split_overextended_numbered_headings(blocks)
     blocks = split_mid_paragraph_section_headings(blocks)
     blocks = promote_numbered_paragraph_headings(blocks)

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from document.models import DocumentBlock
 from document.postprocess.figure_extractor import document_asset_dir
+from document.postprocess.latex_quality import latex_looks_corrupt
 
 logger = logging.getLogger("Document.formula_cropper")
 
@@ -159,6 +160,10 @@ def _trim_formula_bottom_against_text(rect, block: DocumentBlock, blocks: list[D
 _CITATION_ONLY_RE = re.compile(r"^\$?\s*\[[\d,\s]+\]\.?\s*\$?$")
 
 
+def _latex_is_garbled(text: str) -> bool:
+    return latex_looks_corrupt(text)
+
+
 def _should_crop_formula(block: DocumentBlock) -> bool:
     metadata = block.metadata or {}
     if metadata.get("formula_mode") == "inline":
@@ -177,6 +182,8 @@ def _should_crop_formula(block: DocumentBlock) -> bool:
 
     if not text:
         return False
+    if _latex_is_garbled(text) and _has_reasonable_formula_bbox(block):
+        return True
     if "$" in text and text.count("$") != 2:
         return True
     if re.search(r"\$[A-Za-zÀ-ÿ]{1,2}\$|\bl\s*\$\s*n\b", text):

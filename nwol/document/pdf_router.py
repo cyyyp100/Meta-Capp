@@ -296,6 +296,8 @@ def _fuse_geometric_and_semantic_results(
         appended += 1
 
     geo_blocks = _order_blocks_for_reading(geo_blocks)
+    geo_blocks = _remove_prefix_fragment_blocks(geo_blocks)
+    geo_blocks = _filter_garbled_math_paragraphs(geo_blocks)
     warnings = _unique([
         *geo_result.warnings,
         *[
@@ -360,7 +362,17 @@ def _best_semantic_match(
             continue
         similarity = text_similarity(geo_text, semantic_text)
         if similarity <= 0.55:
-            continue
+            # For short geo blocks, also try prefix-fragment matching:
+            # a PyMuPDF fragment like "...organ bound-" can match the longer
+            # ODL block "...organ boundaries, enhancing..." at a lower threshold.
+            if _geo_is_prefix_fragment_of_semantic(geo_text, semantic_text):
+                similarity = 0.56  # treat as just above threshold
+            elif _geo_has_long_common_prefix_with_semantic(geo_text, semantic_text):
+                # Column-contaminated geo block: shares a long prefix with the ODL
+                # version but diverges because PyMuPDF injected text from adjacent column.
+                similarity = 0.56
+            else:
+                continue
         score = similarity
         if semantic_block.bbox is not None and geo_block.bbox is not None:
             score += _bbox_similarity_bonus(geo_block.bbox, semantic_block.bbox)
@@ -373,6 +385,48 @@ def _best_semantic_match(
     return max(scored, key=lambda item: item[0])[1]
 
 
+def _geo_is_prefix_fragment_of_semantic(geo_text: str, semantic_text: str) -> bool:
+    """Return True if a short geo block looks like a leading fragment of the semantic block.
+
+    Used to match hyphenated column-end fragments ("...organ bound-") with the
+    longer ODL block that contains the complete sentence.
+    """
+    geo_words = geo_text.split()
+    if len(geo_words) > 18 or len(geo_words) < 4:
+        return False
+    sem_clean = _clean_text_for_comparison(semantic_text).casefold()
+    if not sem_clean:
+        return False
+    # Remove trailing hyphen from geo text and compare as prefix
+    geo_clean = re.sub(r"-+\s*$", "", _clean_text_for_comparison(geo_text)).strip().casefold()
+    if len(geo_clean) < 15:
+        return False
+    # The geo text should appear near the start (or anywhere) of the semantic text
+    probe_len = min(len(geo_clean), 60)
+    probe = geo_clean[:probe_len]
+    pos = sem_clean.find(probe[:max(15, probe_len // 2)])
+    if pos < 0 or pos > max(120, len(sem_clean) // 3):
+        return False
+    # Verify with word-level Jaccard anchored at the match position
+    geo_set = set(geo_clean.split())
+    sem_window_words = set(sem_clean[pos:pos + len(geo_clean) + 30].split())
+    if not geo_set or not sem_window_words:
+        return False
+    return len(geo_set & sem_window_words) / max(len(geo_set), 1) >= 0.65
+
+
+def _geo_has_long_common_prefix_with_semantic(geo_text: str, semantic_text: str) -> bool:
+    """Return True when a geo block shares a long common prefix with the semantic block
+    but then diverges — a sign of column-contamination where PyMuPDF picked up text
+    from the adjacent column mid-sentence."""
+    geo_words = _clean_text_for_comparison(geo_text).casefold().split()
+    sem_words = _clean_text_for_comparison(semantic_text).casefold().split()
+    if len(geo_words) < 8 or len(sem_words) < 8:
+        return False
+    common = sum(1 for g, s in zip(geo_words, sem_words) if g == s)
+    return common >= 7
+
+
 def _maybe_replace_text(geo_block: DocumentBlock, semantic_block: DocumentBlock) -> bool:
     if geo_block.page != semantic_block.page and semantic_block.page is not None:
         return False
@@ -381,19 +435,25 @@ def _maybe_replace_text(geo_block: DocumentBlock, semantic_block: DocumentBlock)
 
     geo_text = _block_text(geo_block)
     semantic_text = _block_text(semantic_block)
-    if text_similarity(geo_text, semantic_text) <= 0.55:
+    is_fragment_match = _geo_is_prefix_fragment_of_semantic(geo_text, semantic_text)
+    is_prefix_contaminated = (
+        not is_fragment_match
+        and _geo_has_long_common_prefix_with_semantic(geo_text, semantic_text)
+    )
+    bypass_richness = is_fragment_match or is_prefix_contaminated
+    if text_similarity(geo_text, semantic_text) <= 0.55 and not bypass_richness:
         return False
     if _semantic_heading_prepends_section_to_paragraph(geo_block, semantic_block, geo_text, semantic_text):
         _merge_semantic_metadata(geo_block, semantic_block)
         return False
     _maybe_upgrade_to_heading(geo_block, semantic_block, geo_text)
-    if _semantic_replacement_prepends_unrelated_text(geo_text, semantic_text):
+    if not bypass_richness and _semantic_replacement_prepends_unrelated_text(geo_text, semantic_text):
         _merge_semantic_metadata(geo_block, semantic_block)
         return False
     if _semantic_text_has_corrupt_inline_math(semantic_text) and not _semantic_text_has_corrupt_inline_math(geo_text):
         _merge_semantic_metadata(geo_block, semantic_block)
         return False
-    if not _semantic_text_is_richer(geo_text, semantic_text):
+    if not bypass_richness and not _semantic_text_is_richer(geo_text, semantic_text):
         _merge_semantic_metadata(geo_block, semantic_block)
         return False
 
@@ -586,6 +646,113 @@ def _has_overlapping_block(block: DocumentBlock, existing_blocks: list[DocumentB
         if _bbox_iou(block.bbox, existing.bbox) > 0.45:
             return True
     return False
+
+
+def _remove_prefix_fragment_blocks(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
+    """Remove short textual blocks that are prefix-fragments of a longer block on the same page.
+
+    After geo+semantic fusion, a PyMuPDF column-end fragment ("…organ bound-")
+    may survive alongside the richer ODL block ("…organ boundaries, enhancing…").
+    This pass removes the shorter duplicate.
+    """
+    _TEXTUAL = {"paragraph", "text", "abstract"}
+    to_remove: set[int] = set()
+
+    for i, block in enumerate(blocks):
+        if block.type not in _TEXTUAL or id(block) in to_remove:
+            continue
+        text = _clean_text_for_comparison(_block_text(block))
+        word_count = len(text.split())
+        if word_count > 20 or word_count < 3:
+            continue
+
+        geo_clean = re.sub(r"-+$", "", text).strip().casefold()
+        if len(geo_clean) < 15:
+            continue
+
+        for j, other in enumerate(blocks):
+            if i == j or id(other) in to_remove or other.type not in _TEXTUAL:
+                continue
+            if block.page is not None and other.page is not None and block.page != other.page:
+                continue
+            other_text = _clean_text_for_comparison(_block_text(other)).casefold()
+            if len(other_text) <= len(geo_clean) * 1.25:
+                continue
+            probe = geo_clean[:min(len(geo_clean), 55)]
+            pos = other_text.find(probe[:max(12, len(probe) // 2)])
+            if pos < 0 or pos > max(100, len(other_text) // 3):
+                continue
+            geo_words = set(geo_clean.split())
+            other_prefix_words = set(other_text[pos:pos + len(geo_clean) + 30].split())
+            if geo_words and len(geo_words & other_prefix_words) / len(geo_words) >= 0.65:
+                to_remove.add(id(block))
+                break
+
+    return [b for b in blocks if id(b) not in to_remove]
+
+
+_GARBLED_MATH_PARA_RE = re.compile(
+    r"(?:"
+    r"\^\{[^}]*\}"         # superscript fragment like ^{e}
+    r"|\\textbf\s*\$"      # broken \textbf$ command
+    r"|\$\\t\s+[a-z]"      # split dollar-backslash-letter
+    r"|\\t\s+[a-z]"        # split backslash-letter outside math
+    r"|i\s+i\s+i\s+"       # repeated letter noise
+    r")"
+)
+
+
+def _filter_garbled_math_paragraphs(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
+    """Remove very short paragraph blocks whose text is obviously garbled math/LaTeX noise.
+
+    Catches two patterns:
+    1. Blocks starting with a word-fragment (mid-word start like "spired us...").
+    2. Blocks containing OCR math artifacts that survived as paragraph type.
+    """
+    from document.postprocess.latex_quality import latex_looks_corrupt
+
+    _TEXTUAL = {"paragraph", "text"}
+    result = []
+    for block in blocks:
+        if block.type not in _TEXTUAL:
+            result.append(block)
+            continue
+        text = (block.text or block.latex or "").strip()
+        words = text.split()
+        if not words:
+            result.append(block)
+            continue
+
+        # Drop blocks (≤ 25 words) that are garbled LaTeX artifacts
+        if len(words) <= 25 and _GARBLED_MATH_PARA_RE.search(text):
+            continue
+
+        # Drop blocks whose plain text is corrupt LaTeX (≤ 20 words)
+        if len(words) <= 20 and latex_looks_corrupt(text):
+            continue
+
+        # Drop mid-word-start fragments: start with ≤7-char lowercase string
+        # that looks like the tail of a hyphenated word, and no ODL source
+        first_word = words[0].lstrip("^{").rstrip("}")
+        is_geo_only = not (
+            block.metadata.get("text_enriched_by")
+            or block.metadata.get("semantic_only_block")
+        )
+        if (
+            is_geo_only
+            and len(words) <= 14
+            and 2 <= len(first_word) <= 7
+            and first_word.islower()
+            and first_word not in {
+                "the", "a", "an", "in", "on", "at", "by", "to", "of", "or",
+                "and", "but", "for", "nor", "yet", "so", "as", "if", "we",
+                "it", "is", "be", "do", "he", "no", "up",
+            }
+        ):
+            continue
+
+        result.append(block)
+    return result
 
 
 def _compatible_block_types(left: DocumentBlock, right: DocumentBlock) -> bool:

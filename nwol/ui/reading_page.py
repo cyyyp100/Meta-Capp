@@ -8,6 +8,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
 
+from config.settings import FIGURE_DISPLAY_PAUSE_MS
 from db.metacog import ensure_profile
 from core.chapter_navigation import normalize_heading_title
 from document.postprocess.latex_quality import safe_formula_context_text
@@ -61,6 +62,8 @@ class ReadingPage(tk.Frame):
         self._pending_resume = None
         self._readonly_notice_shown = False
         self._rendered_heading_keys: set[str] = set()
+        self._document_type: str = ""
+        self._last_slide_page: int = 0
         self._build(on_play_pause, on_speed_change)
         self._tick_timer()
 
@@ -92,6 +95,10 @@ class ReadingPage(tk.Frame):
         self.top_nav.set_context("", self.state.current_page, total_pages)
         self.top_nav.set_engine(engine)
 
+    def set_document_type(self, doc_type: str) -> None:
+        self._document_type = doc_type or ""
+        self._last_slide_page = 0
+
     def set_learning_context(self, companion, session_mgr, doc_title: str, chapter: dict) -> None:
         self.companion = companion
         self.session_mgr = session_mgr
@@ -121,6 +128,7 @@ class ReadingPage(tk.Frame):
         self._pending_resume = None
         self._readonly_notice_shown = False
         self._rendered_heading_keys: set[str] = set()
+        self._last_slide_page = 0
         self.top_nav.set_context(chapter.get("title", scope.label), chapter["page_start"], self.state.total_pages)
 
     def clear(self) -> None:
@@ -144,15 +152,21 @@ class ReadingPage(tk.Frame):
         page = _block_page_number(block)
         if page:
             self.top_nav.set_context(self.chapter.get("title", ""), int(page), self.state.total_pages)
+
+        # Slides mode: one full-page image per slide + LLM analysis, no individual blocks
+        if self._document_type == "slides":
+            if page and page != self._last_slide_page:
+                self._last_slide_page = page
+                self.reader.embed_slide_page(page)
+            return
+
         self.reader.append_block(block)
-        if block.get("type") == "figure" and _block_has_schema(block):
-            self.reader.stream_schema_description(
-                block,
-                use_llm=self.llm_available is not False,
-            )
 
     def on_paragraph_done(self, block: dict, resume) -> None:
         """Rendu async après streaming — plus de Q&R par paragraphe, la Q&R est à la section."""
+        if self._document_type == "slides":
+            resume()
+            return
         text = (block.get("text") or "").strip()
         if not text:
             resume()
@@ -176,6 +190,18 @@ class ReadingPage(tk.Frame):
 
         resume()
 
+    def on_figure_schema(self, block: dict, resume) -> None:
+        """Appelé par le moteur pour chaque bloc figure. Stream l'analyse LLM si c'est un schéma,
+        puis rappelle resume() pour que la lecture reprenne après la fin du streaming."""
+        if not _block_has_schema(block) or self.llm_available is False:
+            self.after(FIGURE_DISPLAY_PAUSE_MS, resume)
+            return
+        self.reader.stream_schema_description(
+            block,
+            use_llm=True,
+            on_done=resume,
+        )
+
     def on_section_complete(
         self,
         section_blocks: list,
@@ -184,6 +210,9 @@ class ReadingPage(tk.Frame):
         resume,
     ) -> None:
         """Appelé à la fin de chaque section (titre/sous-titre). Déclenche la Q&R."""
+        if self._document_type == "slides":
+            resume()
+            return
         section_text = _build_section_text(section_blocks)
         heading_label = (heading_block or {}).get("text") or "Section"
         image_paths = _collect_section_image_paths(section_blocks)
@@ -245,6 +274,10 @@ class ReadingPage(tk.Frame):
             session_id=session_id,
             on_complete=lambda: self.after(0, self._resume_after_qa),
         )
+
+    def on_slide_page_change(self, page: int, resume) -> None:
+        self.top_nav.set_context(self.chapter.get("title", ""), page, self.state.total_pages)
+        self.reader.embed_slide_page(page, on_analysis_complete=resume)
 
     def on_math_paragraph_start(self, block: dict, on_done) -> None:  # noqa: D401
         page = _block_page_number(block)

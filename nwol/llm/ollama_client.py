@@ -35,6 +35,7 @@ from llm.prompts import (
     build_rephrasing_prompt,
     build_schema_render_prompt,
     build_session_summary_prompt,
+    build_slide_analysis_prompt,
     build_subject_detection_prompt,
     build_table_render_prompt,
 )
@@ -396,8 +397,12 @@ def render_math_paragraph_stream_async(
     on_complete,
     on_error,
     model: str = OLLAMA_MODEL,
+    document_context_before: str = "",
 ) -> None:
-    chunks = _split_paragraph_for_llm_with_context(paragraph_text)
+    chunks = _split_paragraph_for_llm_with_context(
+        paragraph_text,
+        document_context_before=document_context_before,
+    )
     safe_images = _filter_heavy_images(image_paths or [])
     task_options = OLLAMA_TASK_OPTIONS.get("math_render", OLLAMA_OPTIONS)
     seq = next(_QUEUE_COUNTER)
@@ -499,6 +504,7 @@ def render_schema_stream_async(
     def _run() -> None:
         if _generation_token != captured_token:
             logger.debug("Tâche LLM schema_render annulée (token obsolète)")
+            on_error("Génération annulée")
             return
         try:
             images = _load_ollama_images(safe_images)
@@ -507,6 +513,7 @@ def render_schema_stream_async(
             prompt = build_schema_render_prompt(caption)
             rendered = _stream_ollama_response(prompt, model, images, on_token, options=task_options, cancel_token=captured_token)
             if _generation_token != captured_token:
+                on_error("Génération annulée")
                 return
             on_complete(rendered.strip())
         except Exception as exc:
@@ -532,6 +539,7 @@ def render_table_stream_async(
     def _run() -> None:
         if _generation_token != captured_token:
             logger.debug("Tâche LLM table_render annulée (token obsolète)")
+            on_error("Génération annulée")
             return
         try:
             images = _load_ollama_images(safe_images)
@@ -540,10 +548,46 @@ def render_table_stream_async(
             prompt = build_table_render_prompt(caption)
             rendered = _stream_ollama_response(prompt, model, images, on_token, options=task_options, cancel_token=captured_token)
             if _generation_token != captured_token:
+                on_error("Génération annulée")
                 return
             on_complete(rendered.strip())
         except Exception as exc:
             logger.error("Échec streaming LLM table_render : %s", exc)
+            on_error(str(exc))
+
+    _LLM_QUEUE.put((1, seq, _run))
+
+
+def render_slide_stream_async(
+    image_path: str,
+    caption: str,
+    on_token,
+    on_complete,
+    on_error,
+    model: str = OLLAMA_MODEL,
+) -> None:
+    safe_images = _filter_heavy_images([image_path] if image_path else [])
+    task_options = OLLAMA_TASK_OPTIONS.get("schema_description", OLLAMA_OPTIONS)
+    seq = next(_QUEUE_COUNTER)
+    captured_token = _generation_token
+
+    def _run() -> None:
+        if _generation_token != captured_token:
+            logger.debug("Tâche LLM slide_render annulée (token obsolète)")
+            on_error("Génération annulée")
+            return
+        try:
+            images = _load_ollama_images(safe_images)
+            if not images:
+                raise ValueError("Image de slide indisponible ou trop lourde")
+            prompt = build_slide_analysis_prompt()
+            rendered = _stream_ollama_response(prompt, model, images, on_token, options=task_options, cancel_token=captured_token)
+            if _generation_token != captured_token:
+                on_error("Génération annulée")
+                return
+            on_complete(rendered.strip())
+        except Exception as exc:
+            logger.error("Échec streaming LLM slide_render : %s", exc)
             on_error(str(exc))
 
     _LLM_QUEUE.put((1, seq, _run))
@@ -598,6 +642,7 @@ def _split_paragraph_for_llm_with_context(
     previous_context_chars: int = 520,
     next_context_chars: int = 320,
     source_block_ids: list[str] | None = None,
+    document_context_before: str = "",
 ) -> list[dict[str, str | list[str]]]:
     """Split text into contextual chunks for LLM processing.
 
@@ -606,11 +651,18 @@ def _split_paragraph_for_llm_with_context(
       - previous_context / next_context: surrounding text for understanding only
       - instruction: explicit reminder not to rewrite context
       - source_block_ids: which blocks this chunk belongs to (for dedup at recomposition)
+
+    document_context_before seeds the first chunk's previous_context with text
+    from already-rendered surrounding blocks so the LLM has document-level context.
     """
     chunks = _split_paragraph_for_llm(text, max_chars=max_chars)
     result: list[dict[str, str | list[str]]] = []
     for index, target in enumerate(chunks):
-        previous_context = chunks[index - 1][-previous_context_chars:] if index > 0 else ""
+        if index > 0:
+            previous_context = chunks[index - 1][-previous_context_chars:]
+        else:
+            # Seed from document-level rendered context when no intra-block context exists.
+            previous_context = document_context_before[-previous_context_chars:] if document_context_before else ""
         next_context = chunks[index + 1][:next_context_chars] if index + 1 < len(chunks) else ""
         result.append({
             "target": target,
