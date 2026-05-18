@@ -279,6 +279,8 @@ def _slice_from_index_to_end(blocks: list[dict], start: int) -> list[dict]:
     ]
     if not backfill:
         return selected
+    if not _has_right_column_text_flow(backfill):
+        return selected
 
     left_tail = [block for block in same_page_tail if not _is_right_column_block(block, right_floor, page_width)]
     right_tail = [block for block in same_page_tail if _is_right_column_block(block, right_floor, page_width)]
@@ -590,6 +592,58 @@ def _is_right_column_block(block: dict, right_floor: float, page_width: float) -
     if block.get("is_metadata") or block.get("is_reference"):
         return False
     return (bbox[2] - bbox[0]) <= page_width * 0.58 or bbox[0] >= page_width * 0.55
+
+
+_RIGHT_COLUMN_TEXT_TYPES = {
+    "heading",
+    "subheading",
+    "subsubheading",
+    "paragraph",
+    "text",
+    "quote",
+    "abstract",
+    "bullet_list",
+    "definition",
+    "theorem",
+    "example",
+    "remark",
+    "warning",
+}
+_RIGHT_COLUMN_WORD_RE = re.compile(r"\b[A-Za-zÀ-ÿ0-9]{2,}\b")
+
+
+def _has_right_column_text_flow(blocks: list[dict]) -> bool:
+    """Guard same-page backfill against single-column floats.
+
+    The backfill exists for true two-column pages where a selected heading sits
+    near the end of the left column and the logical continuation is in the right
+    column. A single right-side figure or formula above the heading is usually a
+    float from the previous section and must not be injected into the scope.
+    """
+    text_flow = [block for block in blocks if _is_right_column_text_flow_block(block)]
+    if len(text_flow) >= 2:
+        return True
+    return any(str(block.get("type") or "") in HEADING_BLOCK_TYPES for block in text_flow)
+
+
+def _is_right_column_text_flow_block(block: dict) -> bool:
+    btype = str(block.get("type") or "")
+    if btype not in _RIGHT_COLUMN_TEXT_TYPES:
+        return False
+    metadata = block.get("metadata") or {}
+    if isinstance(metadata, dict) and (
+        metadata.get("is_caption")
+        or metadata.get("caption_attached_to_visual")
+        or metadata.get("semantic_only_block")
+        or metadata.get("displayable") is False
+    ):
+        return False
+    if block.get("is_caption"):
+        return False
+    text = str(block.get("text") or block.get("caption") or "").strip()
+    if btype in HEADING_BLOCK_TYPES:
+        return bool(text)
+    return len(_RIGHT_COLUMN_WORD_RE.findall(text)) >= 3
 
 
 def _same_page_position_key(block: dict) -> tuple[float, float]:

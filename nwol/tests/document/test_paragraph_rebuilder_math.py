@@ -57,6 +57,30 @@ def test_new_paragraph_kept_after_hard_gap():
     assert result[1].text.startswith("Donc")
 
 
+def test_context_crop_only_block_is_not_merged_into_following_paragraph():
+    blocks = [
+        DocumentBlock(
+            type="paragraph",
+            text="With the attention matrix $A_{K \\rightarrow Q$} from key to query.",
+            page=1,
+            bbox=BoundingBox(50, 72, 286, 120),
+            metadata={"render_mode": "context_crop_only", "context_asset_display": True},
+        ),
+        DocumentBlock(
+            type="paragraph",
+            text="Unlike typical attention layers, this residual path is described separately.",
+            page=1,
+            bbox=BoundingBox(50, 130, 286, 156),
+        ),
+    ]
+
+    result = rebuild_paragraphs(blocks)
+
+    assert len(result) == 2
+    assert result[0].metadata["render_mode"] == "context_crop_only"
+    assert result[1].text.startswith("Unlike typical attention")
+
+
 def test_cross_page_hyphenated_paragraph_is_merged():
     blocks = [
         DocumentBlock(

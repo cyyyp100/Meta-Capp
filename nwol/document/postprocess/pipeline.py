@@ -6,8 +6,15 @@ from document.postprocess.context_assets import crop_complex_context_blocks
 from document.postprocess.algorithm_figures import crop_algorithm_blocks
 from document.postprocess.figure_extractor import associate_captions, deduplicate_visual_blocks, extract_native_figures
 from document.postprocess.formula_cropper import crop_formula_blocks
-from document.postprocess.inline_formula_repair import repair_fragmented_inline_formulas
-from document.postprocess.learning_normalizer import normalize_for_learning, promote_numbered_paragraph_headings
+from document.postprocess.inline_formula_repair import (
+    repair_fragmented_inline_formulas,
+    repair_same_row_inline_math_fragments,
+)
+from document.postprocess.learning_normalizer import (
+    fix_wrong_formula_blocks,
+    normalize_for_learning,
+    promote_numbered_paragraph_headings,
+)
 from document.postprocess.list_normalizer import normalize_lists
 from document.postprocess.math_fragments import repair_display_math_fragments
 from document.postprocess.math_normalizer import normalize_math_blocks
@@ -27,6 +34,7 @@ def postprocess_document_blocks(
     pages: set[int] | None = None,
 ) -> list[DocumentBlock]:
     """Run the shared block cleanup/enrichment chain for every PDF backend."""
+    blocks = repair_same_row_inline_math_fragments(blocks)
     blocks = normalize_math_blocks(blocks)
     blocks = repair_fragmented_inline_formulas(blocks)
     blocks = normalize_math_blocks(blocks)
@@ -59,6 +67,7 @@ def postprocess_document_blocks(
     blocks = repair_fragmented_inline_formulas(blocks)
     blocks = rebuild_paragraphs(blocks, page_sizes=page_sizes)
     blocks = normalize_math_blocks(blocks)
+    blocks = fix_wrong_formula_blocks(blocks)
     blocks = cleanup_visual_math_fragments(blocks)
     blocks = group_math_dense_paragraphs_until_heading(blocks)
     blocks = _split_long_reader_paragraphs(blocks)

@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 
 from document.layout.column_detector import detect_columns
-from document.layout.reading_order import order_page_blocks
 from document.models import BoundingBox, RawBlock, RawLine
 
 
@@ -22,6 +21,7 @@ PROSE_RE = re.compile(
     r"comme|donc|car|avec|pour|alors|on|obtient|partir|voisinage|"
     r"nombres?|réels?|reels?|entiers?|naturels?|tout|tous|toute|toutes|"
     r"écrire|ecrire|revient|autrement|dit|équivalent|equivalent|"
+    r"where|and|with|from|into|then|these|this|that|each|"
     r"choisi|simplifier|expression|ordre|principal|relation|réciproque|reciproque|"
     r"constantes|multiplicatives|comptent|éviter|eviter|garder|terme|limite)\b",
     re.I,
@@ -316,8 +316,91 @@ def _sort_lines_column_aware(
         page_lines = by_page[page]
         page_width = page_sizes.get(page, (0.0, 0.0))[0]
         layout = detect_columns(page_lines, page_width=page_width)
-        result.extend(order_page_blocks(page_lines, layout))  # type: ignore[arg-type]
+        result.extend(_order_page_lines(page_lines, layout))
     return result
+
+
+def _order_page_lines(lines: list[RawLine], layout) -> list[RawLine]:
+    if not lines:
+        return []
+    if getattr(layout, "layout_type", "") != "two_columns":
+        return _sort_visual_rows(lines)
+
+    left_ids = {id(line) for line in layout.columns[0]} if len(layout.columns) > 0 else set()
+    right_ids = {id(line) for line in layout.columns[1]} if len(layout.columns) > 1 else set()
+    narrow = [line for line in lines if id(line) in left_ids or id(line) in right_ids]
+    full_width = _sort_visual_rows(list(layout.full_width_blocks))
+    result: list[RawLine] = []
+    remaining = {id(line) for line in narrow}
+
+    for wide in full_width:
+        before_left = [
+            line for line in narrow
+            if id(line) in remaining
+            and id(line) in left_ids
+            and line.bbox.y0 < wide.bbox.y0
+        ]
+        before_right = [
+            line for line in narrow
+            if id(line) in remaining
+            and id(line) in right_ids
+            and line.bbox.y0 < wide.bbox.y0
+        ]
+        result.extend(_sort_visual_rows(before_left))
+        result.extend(_sort_visual_rows(before_right))
+        for line in before_left + before_right:
+            remaining.discard(id(line))
+        result.append(wide)
+
+    rest_left = [line for line in narrow if id(line) in remaining and id(line) in left_ids]
+    rest_right = [line for line in narrow if id(line) in remaining and id(line) in right_ids]
+    result.extend(_sort_visual_rows(rest_left))
+    result.extend(_sort_visual_rows(rest_right))
+
+    placed = {id(line) for line in result}
+    for line in _sort_visual_rows(lines):
+        if id(line) not in placed:
+            result.append(line)
+    return result
+
+
+def _sort_visual_rows(lines: list[RawLine]) -> list[RawLine]:
+    if len(lines) <= 1:
+        return list(lines)
+
+    rows: list[list[RawLine]] = []
+    for line in sorted(lines, key=lambda item: (item.page, item.bbox.y0, item.bbox.x0)):
+        for row in rows[-4:]:
+            if _line_fits_visual_row(row, line):
+                row.append(line)
+                break
+        else:
+            rows.append([line])
+
+    ordered_rows = sorted(rows, key=lambda row: (row[0].page, _row_bbox(row).y0, _row_bbox(row).x0))
+    ordered: list[RawLine] = []
+    for row in ordered_rows:
+        ordered.extend(sorted(row, key=lambda item: (item.bbox.x0, item.bbox.y0)))
+    return ordered
+
+
+def _line_fits_visual_row(row: list[RawLine], line: RawLine) -> bool:
+    if not row or any(item.page != line.page for item in row):
+        return False
+    bbox = _row_bbox(row)
+    overlap = min(bbox.y1, line.bbox.y1) - max(bbox.y0, line.bbox.y0)
+    min_height = max(1.0, min(bbox.height, line.bbox.height))
+    if overlap >= min_height * 0.28:
+        return True
+    center_delta = abs(bbox.center_y - line.bbox.center_y)
+    return center_delta <= max(5.5, min_height * 0.65)
+
+
+def _row_bbox(row: list[RawLine]) -> BoundingBox:
+    bbox = row[0].bbox
+    for line in row[1:]:
+        bbox = bbox.union(line.bbox)
+    return bbox
 
 
 def _can_group_with_math_group(group: list[RawLine], candidate: RawLine) -> bool:

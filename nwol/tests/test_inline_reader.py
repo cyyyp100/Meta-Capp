@@ -13,6 +13,7 @@ from ui.inline_reader import (
     _MAX_EMBEDDED_FRAME_WIDTH,
     _block_has_math,
     _context_asset_is_unsafe_for_math_render,
+    _formula_crop_display_limits,
     _formula_should_render_with_llm,
     _formula_source_text,
     _markdown_table_to_monospace,
@@ -121,6 +122,20 @@ def test_context_asset_crop_only_replaces_fragmented_text():
     assert _should_replace_text_with_context_asset(block) is True
 
 
+def test_fragmented_context_asset_requires_explicit_display_flag():
+    block = {
+        "type": "paragraph",
+        "text": "Large paragraph with math context kept for the LLM.",
+        "metadata": {
+            "context_asset_path": "/tmp/context.png",
+            "context_asset_reason": "fragmented_math_text",
+            "context_asset_display": False,
+        },
+    }
+
+    assert _should_show_context_asset(block) is False
+
+
 def test_formula_crop_is_not_treated_as_schema(tmp_path):
     image = tmp_path / "formula.png"
     image.write_bytes(b"png")
@@ -152,6 +167,19 @@ def test_display_formula_crop_prefers_stable_pdf_image_over_latex_llm():
     assert _formula_should_render_with_llm(block) is False
     assert _formula_source_text(block).startswith("$$")
     assert _formula_source_text(block).endswith("$$")
+
+
+def test_formula_crop_display_limits_follow_pdf_bbox_not_png_resolution():
+    block = {
+        "type": "formula",
+        "bbox": [440.0, 603.0, 459.0, 621.0],
+        "metadata": {"render_mode": "pdf_crop"},
+    }
+
+    max_width, max_height = _formula_crop_display_limits(block)
+
+    assert 88 <= max_width < 120
+    assert 42 <= max_height < 80
 
 
 def test_corrupt_formula_source_uses_image_only_prompt():

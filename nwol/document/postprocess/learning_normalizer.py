@@ -279,6 +279,54 @@ def assign_stable_ids(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
 _INLINE_MATH_RE = re.compile(r"\$[^$]{1,120}\$")
 _MATH_EXPRESSION_CHARS = frozenset("=+-*/∑∫≤≥∈∉Δαβγλθπφψω()[]{}^_\\|<>")
 _JOURNAL_VOLUME_RE = re.compile(r"\d+\(\d+\)[:\s]\d+[–—\-]\d+")
+_FORMULA_CITATION_FRAGMENT_RE = re.compile(
+    r"^\s*\$?\s*(?:[A-Za-zÀ-ÿ]{1,5}\s+)?\[[\d,\s]+\]\.?\s*\$?\s*$"
+)
+_FORMULA_URL_ARTIFACT_RE = re.compile(
+    r"\b(?:https?|www|doi|github|tensorflow|tensor2tensor)\b",
+    re.I,
+)
+_FORMULA_PROSE_CUE_RE = re.compile(
+    r"\b(?:where|denotes?|though|through|has|mean|variance|computed|assigned|"
+    r"instead|following|denote|projection|matrix|values?|weights?)\b",
+    re.I,
+)
+_MATH_IDENTIFIER_WORDS = {
+    "attention",
+    "softmax",
+    "sigmoid",
+    "relu",
+    "max",
+    "min",
+    "sin",
+    "cos",
+    "tan",
+    "log",
+    "exp",
+    "sqrt",
+    "frac",
+    "left",
+    "right",
+    "text",
+    "textbf",
+    "mathrm",
+    "mathbf",
+    "mathbb",
+    "theta",
+    "beta",
+    "alpha",
+    "gamma",
+    "delta",
+    "nabla",
+    "lrate",
+    "model",
+    "step",
+    "num",
+    "warmup",
+    "steps",
+    "drop",
+    "maml",
+}
 
 
 def fix_false_headings(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
@@ -366,17 +414,78 @@ def fix_wrong_formula_blocks(blocks: list[DocumentBlock]) -> list[DocumentBlock]
             block.metadata.setdefault("detected_as", "heading")
             continue
         if _looks_like_plain_text_label(text):
-            block.type = "paragraph"
-            block.text = clean_text
-            block.latex = None
-            block.metadata.setdefault("corrected_from", "formula")
+            _demote_formula_block(block, clean_text, "plain_text_label")
+            continue
+        if _looks_like_citation_or_url_formula_artifact(text):
+            _demote_formula_block(block, clean_text, "citation_or_url_fragment")
+            continue
+        if _looks_like_prose_formula_artifact(text):
+            _demote_formula_block(block, clean_text, "prose_formula_artifact")
             continue
         if _looks_like_natural_text(text):
-            block.type = "paragraph"
-            block.text = clean_text
-            block.latex = None
-            block.metadata.setdefault("corrected_from", "formula")
+            _demote_formula_block(block, clean_text, "natural_text")
     return blocks
+
+
+def _demote_formula_block(block: DocumentBlock, clean_text: str, reason: str) -> None:
+    block.type = "paragraph"
+    block.text = clean_text
+    block.latex = None
+    block.image_path = None
+    metadata = block.metadata
+    metadata.setdefault("corrected_from", "formula")
+    metadata.setdefault("detected_as", reason)
+    for key in (
+        "formula_image_path",
+        "llm_crop_path",
+        "llm_crop_bbox",
+        "llm_crop_confidence",
+    ):
+        metadata.pop(key, None)
+    if metadata.get("render_mode") == "pdf_crop":
+        metadata.pop("render_mode", None)
+    if _has_math_signal(clean_text):
+        metadata["contains_inline_math"] = True
+        if metadata.get("formula_mode") == "display":
+            metadata["formula_mode"] = "inline"
+    else:
+        metadata.pop("formula_mode", None)
+
+
+def _looks_like_citation_or_url_formula_artifact(text: str) -> bool:
+    stripped = _strip_formula_delimiters(text)
+    if not stripped:
+        return False
+    if _FORMULA_CITATION_FRAGMENT_RE.match(text) or _FORMULA_CITATION_FRAGMENT_RE.match(stripped):
+        return True
+    return bool(_FORMULA_URL_ARTIFACT_RE.search(stripped))
+
+
+def _looks_like_prose_formula_artifact(text: str) -> bool:
+    stripped = _strip_formula_delimiters(text)
+    if not stripped:
+        return False
+    if not _FORMULA_PROSE_CUE_RE.search(stripped):
+        return False
+
+    prose_words = _formula_prose_words(stripped)
+    if len(prose_words) >= 2:
+        return True
+    return bool(stripped.endswith(":") and prose_words)
+
+
+def _formula_prose_words(text: str) -> list[str]:
+    words = []
+    for word in re.findall(r"[A-Za-zÀ-ÿ]{3,}", text):
+        lowered = word.casefold()
+        if lowered in _MATH_IDENTIFIER_WORDS:
+            continue
+        words.append(lowered)
+    return words
+
+
+def _has_math_signal(text: str) -> bool:
+    return bool(re.search(r"\\[A-Za-z]+|[_^=<>+\-*/]|[∼~≈→←⇒⇔∞≤≥≠±√∑∫α-ωΑ-Ω]", text or ""))
 
 
 def detect_semantic_callouts(blocks: list[DocumentBlock]) -> list[DocumentBlock]:

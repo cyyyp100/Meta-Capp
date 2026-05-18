@@ -95,6 +95,12 @@ def rebuild_paragraphs(
             previous = block
             continue
 
+        if _is_context_crop_only(block):
+            flush()
+            result.append(block)
+            previous = block
+            continue
+
         if block.type in NON_MERGE_TYPES:
             flush()
             result.append(block)
@@ -772,6 +778,11 @@ def _looks_like_display_math_fragment(block: DocumentBlock) -> bool:
     if metadata.get("formula_mode") in {"inline", "ambiguous"}:
         return block.bbox.width < 120.0 and block.bbox.x0 > 120.0
     return block.bbox.width < 120.0 and block.bbox.x0 > 120.0
+
+
+def _is_context_crop_only(block: DocumentBlock) -> bool:
+    metadata = block.metadata or {}
+    return metadata.get("render_mode") == "context_crop_only" or metadata.get("reader_render_mode") == "context_crop_only"
 
 
 def _uses_math_font(metadata: dict) -> bool:

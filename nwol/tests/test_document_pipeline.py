@@ -29,6 +29,7 @@ from document.postprocess.figure_extractor import (
     document_asset_dir,
 )
 from document.postprocess.learning_normalizer import normalize_for_learning
+from document.postprocess.inline_formula_repair import repair_same_row_inline_math_fragments
 from document.postprocess.list_normalizer import normalize_lists
 from document.postprocess.math_normalizer import normalize_math_blocks, normalize_math_text, normalize_unicode_math
 from document.postprocess.paragraph_rebuilder import rebuild_paragraphs
@@ -1347,6 +1348,35 @@ def test_math_span_joining_keeps_spaces_around_inline_formula():
     ]
 
     assert extractor._join_spans(spans) == "Écrire u_{n}∼v_{n} revient à écrire"
+
+
+def test_same_visual_line_inline_math_fragments_do_not_become_formula_crops():
+    from document.layout.math_zone_detector import raw_lines_to_math_aware_blocks
+
+    lines = [
+        RawLine("Where the projections are parameter matrices W^{Q}", BoundingBox(107.5, 203.1, 303.0, 215.7), 1, 10, "Times"),
+        RawLine("i", BoundingBox(295.3, 210.6, 298.1, 217.6), 1, 7, "CMMI7"),
+        RawLine("∈R^{d}model^{×}^{d}k, W^{K}", BoundingBox(306.2, 203.3, 377.3, 215.7), 1, 10, "CMMI7"),
+        RawLine("i", BoundingBox(369.2, 210.5, 372.1, 217.4), 1, 7, "CMMI7"),
+        RawLine("∈R^{d}model^{×}^{d}k, W^{V}", BoundingBox(381.1, 203.3, 450.2, 215.7), 1, 10, "CMMI7"),
+        RawLine("i", BoundingBox(444.1, 210.5, 446.9, 217.4), 1, 7, "CMMI7"),
+        RawLine("∈R^{d}model^{×}^{d}v", BoundingBox(455.1, 203.3, 502.8, 215.4), 1, 10, "CMMI7"),
+        RawLine("and W^{O}∈R^{hd}v^{×}^{d}model.", BoundingBox(108.0, 215.6, 201.2, 227.9), 1, 10, "Times"),
+    ]
+
+    raw_blocks = raw_lines_to_math_aware_blocks(lines, {1: (612.0, 792.0)})
+    classified = classify_blocks(raw_blocks)
+    repaired = repair_same_row_inline_math_fragments(classified)
+    normalized = normalize_math_blocks(repaired)
+
+    local = [block for block in normalized if block.bbox and 200 <= block.bbox.y0 <= 230]
+    assert local
+    assert all(block.type == "paragraph" for block in local)
+
+    rebuilt = rebuild_paragraphs(normalized, page_sizes={1: (612.0, 792.0)})
+    text = " ".join(block.text for block in rebuilt)
+    assert "Where the projections are parameter matrices" in text
+    assert "and" in text
 
 
 def test_mixed_prose_math_stays_paragraph():

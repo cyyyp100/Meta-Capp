@@ -136,6 +136,8 @@ def crop_complex_context_blocks(
                         block.metadata["render_mode"] = "context_crop_only"
                     else:
                         block.metadata.setdefault("render_mode", "text_with_context_crop")
+                else:
+                    block.metadata["context_asset_display"] = False
                 block.metadata["llm_assets"] = [{
                     "type": "image",
                     "path": str(image_path),

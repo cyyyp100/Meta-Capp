@@ -57,7 +57,7 @@ def crop_formula_blocks(
                 if rect.is_empty or rect.width <= 1 or rect.height <= 1:
                     continue
 
-                _CROP_VERSION = "v5_trimmed"
+                _CROP_VERSION = "v6_prose_guard"
                 digest = hashlib.md5(f"{path}-{block.page}-{block.bbox.to_list()}-{_CROP_VERSION}".encode()).hexdigest()[:12]
                 image_path = out / f"formula_p{block.page}_{index}_{digest}.png"
                 if not image_path.exists():
@@ -158,6 +158,49 @@ def _trim_formula_bottom_against_text(rect, block: DocumentBlock, blocks: list[D
 
 
 _CITATION_ONLY_RE = re.compile(r"^\$?\s*\[[\d,\s]+\]\.?\s*\$?$")
+_CITATION_FRAGMENT_RE = re.compile(r"^\$?\s*(?:[A-Za-zÀ-ÿ]{1,5}\s+)?\[[\d,\s]+\]\.?\s*\$?$")
+_URL_ARTIFACT_RE = re.compile(r"\b(?:https?|www|doi|github|tensorflow|tensor2tensor)\b", re.I)
+_PROSE_FORMULA_CUE_RE = re.compile(
+    r"\b(?:where|denotes?|though|through|has|mean|variance|computed|assigned|"
+    r"instead|following|denote|projection|matrix|values?|weights?)\b",
+    re.I,
+)
+_MATH_IDENTIFIER_WORDS = {
+    "attention",
+    "softmax",
+    "sigmoid",
+    "relu",
+    "max",
+    "min",
+    "sin",
+    "cos",
+    "tan",
+    "log",
+    "exp",
+    "sqrt",
+    "frac",
+    "left",
+    "right",
+    "text",
+    "textbf",
+    "mathrm",
+    "mathbf",
+    "mathbb",
+    "theta",
+    "beta",
+    "alpha",
+    "gamma",
+    "delta",
+    "nabla",
+    "lrate",
+    "model",
+    "step",
+    "num",
+    "warmup",
+    "steps",
+    "drop",
+    "maml",
+}
 
 
 def _latex_is_garbled(text: str) -> bool:
@@ -169,6 +212,8 @@ def _should_crop_formula(block: DocumentBlock) -> bool:
     if metadata.get("formula_mode") == "inline":
         return False
     text = (block.text or block.latex or "").strip()
+    if _looks_like_formula_crop_artifact(text):
+        return False
     if _CITATION_ONLY_RE.match(text):
         return False
     if metadata.get("render_mode") == "pdf_crop" and metadata.get("formula_mode") == "display":
@@ -191,6 +236,38 @@ def _should_crop_formula(block: DocumentBlock) -> bool:
     if text.count("(") - text.count(")") >= 2:
         return True
     return False
+
+
+def _looks_like_formula_crop_artifact(text: str) -> bool:
+    stripped = _strip_formula_delimiters(text)
+    if not stripped:
+        return False
+    if _CITATION_FRAGMENT_RE.match(stripped):
+        return True
+    if _URL_ARTIFACT_RE.search(stripped):
+        return True
+    if not _PROSE_FORMULA_CUE_RE.search(stripped):
+        return False
+    return len(_formula_prose_words(stripped)) >= 2 or stripped.endswith(":")
+
+
+def _formula_prose_words(text: str) -> list[str]:
+    words: list[str] = []
+    for word in re.findall(r"[A-Za-zÀ-ÿ]{3,}", text):
+        lowered = word.casefold()
+        if lowered in _MATH_IDENTIFIER_WORDS:
+            continue
+        words.append(lowered)
+    return words
+
+
+def _strip_formula_delimiters(text: str) -> str:
+    stripped = re.sub(r"\s+", " ", text or "").strip()
+    if stripped.startswith("$$") and stripped.endswith("$$"):
+        return stripped[2:-2].strip()
+    if stripped.startswith("$") and stripped.endswith("$"):
+        return stripped[1:-1].strip()
+    return stripped
 
 
 def _has_reasonable_formula_bbox(block: DocumentBlock) -> bool:

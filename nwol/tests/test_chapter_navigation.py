@@ -375,3 +375,61 @@ def test_slice_from_heading_to_end_backfills_same_page_right_column():
         "right-body",
         "next-page",
     ]
+
+
+def test_slice_from_heading_to_end_does_not_backfill_single_column_float():
+    blocks = [
+        {
+            "id": "float-figure",
+            "type": "figure",
+            "page_number": 4,
+            "bbox": [346, 82, 467, 267],
+            "metadata": {"page_width": 612},
+            "text": "Figure 2: previous section float.",
+            "image_path": "assets/fig.png",
+        },
+        {
+            "id": "float-formula",
+            "type": "formula",
+            "page_number": 4,
+            "bbox": [440, 605, 459, 621],
+            "metadata": {"page_width": 612, "formula_mode": "display"},
+            "text": "$x$",
+        },
+        {
+            "id": "selected-heading",
+            "type": "heading",
+            "level": 2,
+            "page_number": 4,
+            "bbox": [108, 631, 231, 641],
+            "metadata": {"page_width": 612},
+            "text": "3.2.2. Multi-Head Attention",
+        },
+        {
+            "id": "selected-body",
+            "type": "paragraph",
+            "page_number": 4,
+            "bbox": [108, 649, 505, 724],
+            "metadata": {"page_width": 612},
+            "text": "Instead of performing a single attention function, project queries and keys.",
+        },
+        {
+            "id": "next-page",
+            "type": "paragraph",
+            "page_number": 5,
+            "bbox": [108, 74, 504, 158],
+            "metadata": {"page_width": 612},
+            "text": "Continuation on the next page.",
+        },
+    ]
+
+    chapter_slice = slice_blocks_from_heading_to_end(
+        blocks,
+        {"title": "3.2.2. Multi-Head Attention", "page_start": 5, "toc_level": 2},
+    )
+
+    assert [block["id"] for block in chapter_slice] == [
+        "selected-heading",
+        "selected-body",
+        "next-page",
+    ]

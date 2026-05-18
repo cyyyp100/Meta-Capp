@@ -13,6 +13,29 @@ _INLINE_RESULT_CUE_RE = re.compile(
 )
 _INLINE_WORD_BRIDGE_RE = re.compile(r"\b(?:by|of|for|to|from|with|and|or|the|la|le|les|de|du|des)\b", re.I)
 _MATH_SIGNAL_RE = re.compile(r"(?:\\[A-Za-z]+|[_^=<>+\-*/]|[∼~≈→←⇒⇔∞≤≥≠±√α-ωΑ-Ω])")
+_PROSE_WORD_RE = re.compile(r"\b[A-Za-zÀ-ÿ]{4,}\b")
+
+
+def repair_same_row_inline_math_fragments(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
+    """Merge inline math shards that belong to the same visual text line.
+
+    PyMuPDF can expose subscripts and math-font spans as separate lines with
+    slightly different y coordinates. If these shards reach the math normalizer
+    independently, they are promoted to display-formula crops even though they
+    are part of one prose line.
+    """
+    result: list[DocumentBlock] = []
+    i = 0
+    while i < len(blocks):
+        merged = _try_merge_same_row_inline_sequence(blocks, i)
+        if merged is not None:
+            block, next_i = merged
+            result.append(block)
+            i = next_i
+            continue
+        result.append(blocks[i])
+        i += 1
+    return result
 
 
 def repair_fragmented_inline_formulas(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
@@ -48,6 +71,83 @@ def repair_fragmented_inline_formulas(blocks: list[DocumentBlock]) -> list[Docum
         result.append(blocks[i])
         i += 1
     return result
+
+
+def _try_merge_same_row_inline_sequence(
+    blocks: list[DocumentBlock],
+    index: int,
+) -> tuple[DocumentBlock, int] | None:
+    if index + 1 >= len(blocks):
+        return None
+
+    first = blocks[index]
+    if not _is_same_row_inline_candidate(first):
+        return None
+
+    group = [first]
+    j = index + 1
+    while j < len(blocks) and len(group) < 10:
+        candidate = blocks[j]
+        if not _is_same_row_inline_candidate(candidate):
+            break
+        if not _same_page(group[-1], candidate):
+            break
+        if not _same_visual_text_row(group, candidate):
+            break
+        if not _horizontally_adjacent_inline_piece(group[-1], candidate):
+            break
+        group.append(candidate)
+        j += 1
+
+    if len(group) < 2 or not _same_row_inline_group_has_prose_bridge(group):
+        return None
+
+    merged = _merge_as_inline_paragraph(*group)
+    merged.metadata["repaired_same_row_inline_math"] = True
+    return merged, j
+
+
+def _is_same_row_inline_candidate(block: DocumentBlock) -> bool:
+    if block.type != "paragraph":
+        return False
+    metadata = block.metadata or {}
+    if metadata.get("is_metadata") or metadata.get("is_caption"):
+        return False
+    text = (block.text or "").strip()
+    if not text or block.bbox is None or block.page is None:
+        return False
+    if metadata.get("contains_inline_math") or metadata.get("formula_mode") in {"inline", "ambiguous"}:
+        return True
+    return len(text) <= 220 and bool(_MATH_SIGNAL_RE.search(text))
+
+
+def _same_visual_text_row(group: list[DocumentBlock], candidate: DocumentBlock) -> bool:
+    bbox = _union_block_bbox(group)
+    if bbox is None or candidate.bbox is None:
+        return False
+    overlap = min(bbox.y1, candidate.bbox.y1) - max(bbox.y0, candidate.bbox.y0)
+    min_height = max(1.0, min(bbox.height, candidate.bbox.height))
+    if overlap >= min_height * 0.28:
+        return True
+    center_delta = abs(bbox.center_y - candidate.bbox.center_y)
+    return center_delta <= max(5.5, min_height * 0.65)
+
+
+def _horizontally_adjacent_inline_piece(left: DocumentBlock, right: DocumentBlock) -> bool:
+    if left.bbox is None or right.bbox is None:
+        return False
+    if right.bbox.x0 < left.bbox.x0 - 8.0:
+        return False
+    gap = right.bbox.x0 - left.bbox.x1
+    return gap <= max(40.0, left.bbox.height * 3.4, right.bbox.height * 3.4)
+
+
+def _same_row_inline_group_has_prose_bridge(group: list[DocumentBlock]) -> bool:
+    text = " ".join((block.text or "").strip() for block in group if (block.text or "").strip())
+    if not _MATH_SIGNAL_RE.search(text):
+        return False
+    prose_words = _PROSE_WORD_RE.findall(re.sub(r"\\[A-Za-z]+", " ", text))
+    return len(prose_words) >= 2
 
 
 def _try_merge_ambiguous_inline_sequence(

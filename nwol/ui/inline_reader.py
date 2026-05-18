@@ -35,6 +35,7 @@ _MAX_READER_FORMULA_CROP_HEIGHT = 200
 _MAX_READER_INLINE_FORMULA_HEIGHT = 42
 _MAX_READER_TABLE_HEIGHT = 260
 _MAX_READER_FIGURE_CROP_HEIGHT = 400
+_PDF_POINT_TO_READER_PIXEL = 1.75
 
 _LATEX_SIGNAL_RE = re.compile(r"\\[A-Za-z]{2,}|\$[^$\n]{1,200}\$")
 _MATH_TEXT_SIGNAL_RE = re.compile(
@@ -1388,11 +1389,12 @@ class InlineReader(tk.Frame):
         image_path = block.get("image_path") or (block.get("metadata") or {}).get("formula_image_path")
         if not image_path:
             return False
+        max_width, max_height = _formula_crop_display_limits(block)
         return self._insert_image_file(
             str(image_path),
             caption_display=False,
-            max_width=_MAX_READER_FORMULA_WIDTH,
-            max_height=_MAX_READER_FORMULA_CROP_HEIGHT,
+            max_width=max_width,
+            max_height=max_height,
             trim_whitespace=True,
         )
 
@@ -1429,10 +1431,11 @@ class InlineReader(tk.Frame):
                 image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
             image = _trim_light_background(image, padding=10)
+            max_width, max_height = _formula_crop_display_limits(block)
             photo = self._photo_from_image(
                 image,
-                max_width=_MAX_READER_FORMULA_WIDTH,
-                max_height=_MAX_READER_FORMULA_CROP_HEIGHT,
+                max_width=max_width,
+                max_height=max_height,
             )
             self._insert_photo(photo)
             return True
@@ -1922,7 +1925,7 @@ def _should_show_context_asset(block: dict) -> bool:
     if metadata.get("render_mode") == "context_crop_only":
         return True
     if metadata.get("formula_mode") == "ambiguous":
-        return True
+        return block.get("type") == "formula" or bool(metadata.get("context_asset_display"))
     if reason == "math_dense_text":
         return False
     if reason == "inline_math":
@@ -1930,7 +1933,7 @@ def _should_show_context_asset(block: dict) -> bool:
     if metadata.get("context_asset_display") is True:
         return True
     if reason == "fragmented_math_text":
-        return True
+        return False
     if metadata.get("reader_render_mode") == "context_crop_only":
         return True
     if metadata.get("render_mode") == "text_with_context_crop" and reason == "low_confidence_text":
@@ -1973,6 +1976,25 @@ def _formula_source_text(block: dict) -> str:
         inner = stripped[1:-1].strip() if stripped.startswith("$") and stripped.endswith("$") else stripped
         return f"$${inner}$$"
     return t("reading.formula_image_prompt")
+
+
+def _formula_crop_display_limits(block: dict) -> tuple[int, int]:
+    bbox = block.get("bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+        return _MAX_READER_FORMULA_WIDTH, _MAX_READER_FORMULA_CROP_HEIGHT
+    try:
+        width = abs(float(bbox[2]) - float(bbox[0]))
+        height = abs(float(bbox[3]) - float(bbox[1]))
+    except (TypeError, ValueError):
+        return _MAX_READER_FORMULA_WIDTH, _MAX_READER_FORMULA_CROP_HEIGHT
+    if width <= 0 or height <= 0:
+        return _MAX_READER_FORMULA_WIDTH, _MAX_READER_FORMULA_CROP_HEIGHT
+
+    logical_width = int((width + 28.0) * _PDF_POINT_TO_READER_PIXEL)
+    logical_height = int((height + 18.0) * (_PDF_POINT_TO_READER_PIXEL * 1.05))
+    max_width = min(_MAX_READER_FORMULA_WIDTH, max(88, logical_width))
+    max_height = min(_MAX_READER_FORMULA_CROP_HEIGHT, max(_MAX_READER_INLINE_FORMULA_HEIGHT, logical_height))
+    return max_width, max_height
 
 
 def _context_asset_is_unsafe_for_math_render(block: dict) -> bool:
