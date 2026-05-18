@@ -401,6 +401,8 @@ def _geo_is_prefix_fragment_of_semantic(geo_text: str, semantic_text: str) -> bo
     geo_clean = re.sub(r"-+\s*$", "", _clean_text_for_comparison(geo_text)).strip().casefold()
     if len(geo_clean) < 15:
         return False
+    if len(sem_clean) <= len(geo_clean) * 1.08:
+        return False
     # The geo text should appear near the start (or anywhere) of the semantic text
     probe_len = min(len(geo_clean), 60)
     probe = geo_clean[:probe_len]
@@ -440,6 +442,12 @@ def _maybe_replace_text(geo_block: DocumentBlock, semantic_block: DocumentBlock)
         not is_fragment_match
         and _geo_has_long_common_prefix_with_semantic(geo_text, semantic_text)
     )
+    if (
+        is_prefix_contaminated
+        and len(_clean_text_for_comparison(semantic_text)) < len(_clean_text_for_comparison(geo_text)) * 0.92
+    ):
+        _merge_semantic_metadata(geo_block, semantic_block)
+        return False
     bypass_richness = is_fragment_match or is_prefix_contaminated
     if text_similarity(geo_text, semantic_text) <= 0.55 and not bypass_richness:
         return False
@@ -574,7 +582,7 @@ def _semantic_heading_prepends_section_to_paragraph(
 def _starts_with_section_number(text: str) -> bool:
     return bool(
         re.match(
-            r"^\s*(?:\d+(?:\.\d+)*|[A-Z](?:\.\d+)*\.?)(?:\s+|(?=[A-Za-zÀ-ÿ]))",
+            r"^\s*(?:\d+(?:\.\d+)*|[A-Z](?:\.\d+)+|[A-Z]\.)(?:\s+|(?=[A-Za-zÀ-ÿ]))",
             text,
             re.I,
         )
@@ -743,6 +751,7 @@ def _filter_garbled_math_paragraphs(blocks: list[DocumentBlock]) -> list[Documen
             and len(words) <= 14
             and 2 <= len(first_word) <= 7
             and first_word.islower()
+            and not re.search(r"\d", text)
             and first_word not in {
                 "the", "a", "an", "in", "on", "at", "by", "to", "of", "or",
                 "and", "but", "for", "nor", "yet", "so", "as", "if", "we",

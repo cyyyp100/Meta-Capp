@@ -445,6 +445,15 @@ def _can_merge_around_visual_interlude(
         return True
     if left.bbox.y1 < page_height * 0.72:
         return False
+    current_height = float((page_sizes.get(right_page) or (0.0, 0.0))[1] or 0.0)
+    has_table_interlude = any(block.type == "table" for block in interlude)
+    if (
+        not has_table_interlude
+        and current_height > 0.0
+        and right.bbox is not None
+        and right.bbox.y0 > current_height * 0.30
+    ):
+        return False
     return any(int(block.page or 0) == right_page for block in interlude)
 
 
@@ -508,11 +517,18 @@ def _starts_new_paragraph(
     if _looks_like_column_restart(previous, block, profile):
         vertical_regression = previous.bbox.y0 - block.bbox.y0
         is_deep_column_jump = vertical_regression > max(50.0, profile.line_height * 4.0)
+        if _looks_like_reverse_column_jump(previous, block, profile):
+            return True
+        if previous_text.endswith("-") and _looks_like_column_flow_continuation(previous_text, current_text):
+            return False
         if not is_deep_column_jump and _looks_like_column_flow_continuation(previous_text, current_text):
             return False
         return True
 
     if _looks_like_parallel_column_line(previous, block, profile):
+        return True
+
+    if _looks_like_adjacent_cross_column_line(previous, block, profile):
         return True
 
     if _wide_math_lead_should_stand_alone(previous, block):
@@ -575,6 +591,8 @@ def _looks_like_cross_page_continuation(
 
 
 def _has_cross_page_continuation_signal(previous_text: str, current_text: str) -> bool:
+    if _looks_like_section_heading_text(previous_text) or _looks_like_section_heading_text(current_text):
+        return False
     if previous_text.endswith("-"):
         return True
     if _previous_allows_indent_continuation(previous_text):
@@ -622,6 +640,20 @@ def _looks_like_column_restart(
     return column_shift
 
 
+def _looks_like_reverse_column_jump(
+    previous: DocumentBlock,
+    block: DocumentBlock,
+    profile: _PageParagraphProfile,
+) -> bool:
+    if previous.bbox is None or block.bbox is None:
+        return False
+    vertical_regression = previous.bbox.y0 - block.bbox.y0
+    if vertical_regression <= max(8.0, profile.line_height * 1.2):
+        return False
+    left_shift = previous.bbox.center_x - block.bbox.center_x
+    return left_shift > max(80.0, min(previous.bbox.width, block.bbox.width) * 0.35)
+
+
 def _looks_like_column_flow_continuation(previous_text: str, current_text: str) -> bool:
     if not previous_text or not current_text:
         return False
@@ -649,6 +681,38 @@ def _looks_like_parallel_column_line(
         return False
     horizontal_shift = abs(block.bbox.center_x - previous.bbox.center_x)
     return horizontal_shift > max(120.0, min(previous.bbox.width, block.bbox.width) * 0.65)
+
+
+def _looks_like_adjacent_cross_column_line(
+    previous: DocumentBlock,
+    block: DocumentBlock,
+    profile: _PageParagraphProfile,
+) -> bool:
+    if previous.bbox is None or block.bbox is None:
+        return False
+    if not _looks_like_cross_column_pair(previous.bbox, block.bbox, profile):
+        return False
+    vertical_regression = previous.bbox.y0 - block.bbox.y0
+    if vertical_regression > max(50.0, profile.line_height * 4.0):
+        return False
+    vertical_gap = block.bbox.y0 - previous.bbox.y1
+    same_or_next_band = (
+        abs(block.bbox.y0 - previous.bbox.y0) <= max(18.0, profile.line_height * 1.25)
+        or -profile.line_height <= vertical_gap <= profile.soft_break_gap
+    )
+    return same_or_next_band
+
+
+def _looks_like_cross_column_pair(
+    left: BoundingBox,
+    right: BoundingBox,
+    profile: _PageParagraphProfile,
+) -> bool:
+    horizontal_gap = max(right.x0 - left.x1, left.x0 - right.x1)
+    if horizontal_gap <= max(18.0, profile.line_height * 1.5):
+        return False
+    horizontal_shift = abs(right.center_x - left.center_x)
+    return horizontal_shift > max(120.0, min(left.width, right.width) * 0.65)
 
 
 def _wide_math_lead_should_stand_alone(previous: DocumentBlock, block: DocumentBlock) -> bool:
@@ -761,6 +825,21 @@ def _looks_like_continuation(previous_text: str, current_text: str) -> bool:
     return bool(_CONNECTOR_START_RE.match(current_text)) and not _STRONG_PARAGRAPH_START_RE.match(current_text)
 
 
+_SECTION_HEADING_TEXT_RE = re.compile(r"^\s*\d+(?:\.\d+)*\.?\s+[A-Za-zÀ-ÿ0-9]")
+
+
+def _looks_like_section_heading_text(text: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if len(cleaned) > 140:
+        return False
+    if not _SECTION_HEADING_TEXT_RE.match(cleaned):
+        return False
+    if cleaned.endswith((".", "!", "?", ":", ";")):
+        return False
+    words = re.findall(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9'’+-]*", cleaned)
+    return 1 <= len(words) <= 12
+
+
 def _previous_allows_indent_continuation(text: str) -> bool:
     return text.endswith((",", ";", ":", "(", "[", "{", "+", "-", "=", "/", "→", "⇒"))
 
@@ -787,11 +866,81 @@ def _join_hyphenated_line(left: str, right: str) -> str:
 def _clean_merged_text(text: str) -> str:
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
+    text = _repair_soft_hyphenation(text)
     text = _LEADING_DISPLAY_EQUATION_RESIDUE_RE.sub("", text).strip()
     text = _LEADING_EQUATION_NUMBER_RE.sub("", text).strip()
     text = _ORPHAN_PREFIX_RE.sub("", text).strip()
     text = re.sub(r"\s+([,.;:])", r"\1", text)
     return text
+
+
+_PRESERVE_HYPHEN_PREFIXES = {
+    "anti",
+    "bi",
+    "co",
+    "cross",
+    "few",
+    "high",
+    "inter",
+    "intra",
+    "low",
+    "meta",
+    "multi",
+    "non",
+    "one",
+    "post",
+    "pre",
+    "semi",
+    "self",
+    "sub",
+    "super",
+    "two",
+    "zero",
+}
+_SOFT_HYPHEN_SUFFIXES = (
+    "able",
+    "al",
+    "ance",
+    "ary",
+    "ate",
+    "ation",
+    "ed",
+    "ence",
+    "ent",
+    "er",
+    "es",
+    "ful",
+    "ible",
+    "ic",
+    "ing",
+    "ion",
+    "ity",
+    "ive",
+    "less",
+    "ly",
+    "ment",
+    "ness",
+    "ory",
+    "ous",
+    "sion",
+    "tion",
+    "ual",
+)
+
+
+def _repair_soft_hyphenation(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        left = match.group(1)
+        right = match.group(2)
+        lower_left = left.casefold()
+        lower_right = right.casefold()
+        if lower_left in _PRESERVE_HYPHEN_PREFIXES:
+            return f"{left}-{right}"
+        if len(left) <= 5 or lower_right.endswith(_SOFT_HYPHEN_SUFFIXES):
+            return f"{left}{right}"
+        return f"{left}-{right}"
+
+    return re.sub(r"\b([A-Za-zÀ-ÿ]{2,})-\s+([a-zà-ÿ]{2,})\b", replace, text)
 
 
 def _repair_split_heading_prefixes(blocks: list[DocumentBlock]) -> list[DocumentBlock]:

@@ -284,9 +284,11 @@ def associate_captions(
         for block in text_blocks
         if block.type == "paragraph" and (CAPTION_RE.match(block.text.strip()) or block.metadata.get("is_caption"))
     ]
+    caption_groups = _caption_runs(captions)
     assigned_figure_ids: set[int] = set()
     used_caption_ids: set[int] = set()
-    for caption_index, caption in enumerate(captions, start=1):
+    for caption_index, caption_group in enumerate(caption_groups, start=1):
+        caption = _merged_caption(caption_group)
         group = _caption_figure_group(caption, figure_blocks, assigned_figure_ids, max_distance=max_distance)
         if not group:
             continue
@@ -296,21 +298,75 @@ def associate_captions(
             figure.metadata["caption_group"] = group_id
             figure.metadata["caption_display"] = display_index == 0
             assigned_figure_ids.add(id(figure))
-        used_caption_ids.add(id(caption))
+        used_caption_ids.update(id(item) for item in caption_group)
 
     for figure in figure_blocks:
         if id(figure) in assigned_figure_ids:
             continue
-        nearest = _nearest_caption(figure, captions, used_caption_ids, max_distance=max_distance)
+        nearest_group = _nearest_caption_group(figure, caption_groups, used_caption_ids, max_distance=max_distance)
+        nearest = _merged_caption(nearest_group) if nearest_group else None
         if nearest is None:
             continue
         _attach_caption(figure, nearest.text.strip())
         figure.metadata["caption_display"] = True
-        used_caption_ids.add(id(nearest))
+        used_caption_ids.update(id(item) for item in nearest_group or [])
 
     merged = [block for block in text_blocks if id(block) not in used_caption_ids]
     merged.extend(figure_blocks)
     return sorted(merged, key=_position_key)
+
+
+def _caption_runs(captions: list[DocumentBlock]) -> list[list[DocumentBlock]]:
+    runs: list[list[DocumentBlock]] = []
+    current: list[DocumentBlock] = []
+    for caption in sorted(captions, key=_position_key):
+        if not current:
+            current = [caption]
+            continue
+        if _caption_blocks_should_merge(current[-1], caption):
+            current.append(caption)
+            continue
+        runs.append(current)
+        current = [caption]
+    if current:
+        runs.append(current)
+    return runs
+
+
+def _caption_blocks_should_merge(left: DocumentBlock, right: DocumentBlock) -> bool:
+    if left.page != right.page or left.bbox is None or right.bbox is None:
+        return False
+    if CAPTION_RE.match((right.text or "").strip()):
+        return False
+    gap = right.bbox.y0 - left.bbox.y1
+    if gap < -3.0 or gap > 18.0:
+        return False
+    horizontal_overlap = min(left.bbox.x1, right.bbox.x1) - max(left.bbox.x0, right.bbox.x0)
+    if horizontal_overlap >= min(left.bbox.width, right.bbox.width) * 0.30:
+        return True
+    return abs(left.bbox.x0 - right.bbox.x0) <= 24.0
+
+
+def _merged_caption(captions: list[DocumentBlock]) -> DocumentBlock:
+    first = captions[0]
+    bbox = first.bbox
+    text_parts: list[str] = []
+    for caption in captions:
+        if caption.text:
+            text_parts.append(caption.text.strip())
+        if bbox is not None and caption.bbox is not None:
+            bbox = bbox.union(caption.bbox)
+        elif bbox is None:
+            bbox = caption.bbox
+    text = re.sub(r"\s+", " ", " ".join(text_parts)).strip()
+    return DocumentBlock(
+        type="paragraph",
+        text=_repair_soft_hyphenation(text),
+        page=first.page,
+        bbox=bbox,
+        confidence=min((caption.confidence for caption in captions), default=first.confidence),
+        metadata={**first.metadata, "merged_caption_lines": len(captions)},
+    )
 
 
 def _caption_figure_group(
@@ -331,22 +387,30 @@ def _caption_figure_group(
             continue
         if not _horizontally_related(figure.bbox, caption.bbox):
             continue
-        if figure.bbox.y1 <= caption.bbox.y0:
-            distance = caption.bbox.y0 - figure.bbox.y1
+        if figure.bbox.y1 <= caption.bbox.y0 + 4.0:
+            distance = max(0.0, caption.bbox.y0 - figure.bbox.y1)
             if 0 <= distance <= max_distance:
                 above.append((distance, figure))
-        elif figure.bbox.y0 >= caption.bbox.y1:
-            distance = figure.bbox.y0 - caption.bbox.y1
+        elif figure.bbox.y0 >= caption.bbox.y1 - 4.0:
+            distance = max(0.0, figure.bbox.y0 - caption.bbox.y1)
             if 0 <= distance <= max_distance:
                 below.append((distance, figure))
 
     group: list[DocumentBlock] = []
     if above:
-        group.append(min(above, key=lambda item: item[0])[1])
+        nearest_distance = min(distance for distance, _figure in above)
+        group.extend(
+            figure
+            for distance, figure in sorted(above, key=lambda item: (item[0], _position_key(item[1])))
+            if distance <= nearest_distance + 60.0
+        )
     if below:
-        nearest_below = min(below, key=lambda item: item[0])[1]
-        if id(nearest_below) not in {id(item) for item in group}:
-            group.append(nearest_below)
+        nearest_distance = min(distance for distance, _figure in below)
+        for distance, figure in sorted(below, key=lambda item: (item[0], _position_key(item[1]))):
+            if distance > nearest_distance + 60.0:
+                continue
+            if id(figure) not in {id(item) for item in group}:
+                group.append(figure)
     return sorted(group, key=_position_key)
 
 
@@ -366,10 +430,10 @@ def _nearest_caption(
             continue
         if not _horizontally_related(figure.bbox, caption.bbox):
             continue
-        if caption.bbox.y0 >= figure.bbox.y1:
-            distance = caption.bbox.y0 - figure.bbox.y1
+        if caption.bbox.y0 >= figure.bbox.y1 - 4.0:
+            distance = max(0.0, caption.bbox.y0 - figure.bbox.y1)
         else:
-            distance = figure.bbox.y0 - caption.bbox.y1
+            distance = max(0.0, figure.bbox.y0 - caption.bbox.y1)
         if 0 <= distance <= max_distance:
             candidates.append((distance, caption))
     if not candidates:
@@ -377,10 +441,39 @@ def _nearest_caption(
     return min(candidates, key=lambda item: item[0])[1]
 
 
+def _nearest_caption_group(
+    figure: DocumentBlock,
+    caption_groups: list[list[DocumentBlock]],
+    used: set[int],
+    max_distance: float,
+) -> list[DocumentBlock] | None:
+    candidates: list[tuple[float, list[DocumentBlock]]] = []
+    for group in caption_groups:
+        if any(id(item) in used for item in group):
+            continue
+        caption = _merged_caption(group)
+        nearest = _nearest_caption(figure, [caption], set(), max_distance=max_distance)
+        if nearest is None or nearest.bbox is None or figure.bbox is None:
+            continue
+        if nearest.bbox.y0 >= figure.bbox.y1 - 4.0:
+            distance = max(0.0, nearest.bbox.y0 - figure.bbox.y1)
+        else:
+            distance = max(0.0, figure.bbox.y0 - nearest.bbox.y1)
+        candidates.append((distance, group))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: item[0])[1]
+
+
 def _attach_caption(block: DocumentBlock, caption_text: str) -> None:
-    block.caption = caption_text
+    existing = (block.caption or "").strip()
+    caption_text = caption_text.strip()
+    if existing and caption_text and caption_text not in existing:
+        block.caption = f"{existing} {caption_text}"
+    else:
+        block.caption = existing or caption_text
     if block.type == "figure":
-        block.text = caption_text
+        block.text = block.caption
 
 
 def _caption_matches_visual(caption: DocumentBlock, visual: DocumentBlock) -> bool:
@@ -400,6 +493,75 @@ def _caption_kind(text: str) -> str | None:
     if label in {"table", "tableau"}:
         return "table"
     return "figure"
+
+
+_PRESERVE_HYPHEN_PREFIXES = {
+    "anti",
+    "bi",
+    "co",
+    "cross",
+    "few",
+    "high",
+    "inter",
+    "intra",
+    "low",
+    "meta",
+    "multi",
+    "non",
+    "one",
+    "post",
+    "pre",
+    "semi",
+    "self",
+    "sub",
+    "super",
+    "two",
+    "zero",
+}
+_SOFT_HYPHEN_SUFFIXES = (
+    "able",
+    "al",
+    "ance",
+    "ary",
+    "ate",
+    "ation",
+    "ed",
+    "ence",
+    "ent",
+    "er",
+    "es",
+    "ful",
+    "ible",
+    "ic",
+    "ing",
+    "ion",
+    "ity",
+    "ive",
+    "less",
+    "ly",
+    "ment",
+    "ness",
+    "ory",
+    "ous",
+    "sion",
+    "tion",
+    "ual",
+)
+
+
+def _repair_soft_hyphenation(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        left = match.group(1)
+        right = match.group(2)
+        lower_left = left.casefold()
+        lower_right = right.casefold()
+        if lower_left in _PRESERVE_HYPHEN_PREFIXES:
+            return f"{left}-{right}"
+        if len(left) <= 5 or lower_right.endswith(_SOFT_HYPHEN_SUFFIXES):
+            return f"{left}{right}"
+        return f"{left}-{right}"
+
+    return re.sub(r"\b([A-Za-zÀ-ÿ]{2,})-\s+([a-zà-ÿ]{2,})\b", replace, text)
 
 
 def _horizontally_related(figure_bbox: BoundingBox, caption_bbox: BoundingBox) -> bool:

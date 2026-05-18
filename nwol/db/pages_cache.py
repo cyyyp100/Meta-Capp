@@ -7,7 +7,7 @@ logger = logging.getLogger("DB.pages_cache")
 
 # Bump this whenever PDF block generation changes. The engine key includes this
 # value, so old SQLite page caches are ignored without deleting user data.
-EXTRACTION_CACHE_VERSION = "pdf_pipeline_v37"
+EXTRACTION_CACHE_VERSION = "pdf_pipeline_v38"
 
 
 def _cache_engine_key(engine: str) -> str:

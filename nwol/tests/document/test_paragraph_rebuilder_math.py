@@ -113,6 +113,61 @@ def test_completed_page_paragraph_is_not_merged_with_next_page():
     ]
 
 
+def test_numbered_heading_is_not_merged_across_page_boundary():
+    blocks = [
+        DocumentBlock(
+            type="paragraph",
+            text="3.2.2 Multi-Head Attention",
+            page=4,
+            bbox=BoundingBox(108, 629, 231, 642),
+        ),
+        DocumentBlock(
+            type="paragraph",
+            text="output values. These are concatenated and once again projected.",
+            page=5,
+            bbox=BoundingBox(108, 73, 504, 86),
+        ),
+    ]
+
+    result = rebuild_paragraphs(blocks, page_sizes={4: (612, 792), 5: (612, 792)})
+
+    assert [block.text for block in result] == [
+        "3.2.2 Multi-Head Attention",
+        "output values. These are concatenated and once again projected.",
+    ]
+
+
+def test_low_next_page_text_after_visual_interlude_is_not_cross_page_merged():
+    blocks = [
+        DocumentBlock(
+            type="paragraph",
+            text="The module is illustrated in Fig. 2 and",
+            page=1,
+            bbox=BoundingBox(308, 700, 545, 714),
+        ),
+        DocumentBlock(
+            type="figure",
+            text="Figure 3. Diagram",
+            page=2,
+            bbox=BoundingBox(100, 70, 500, 290),
+        ),
+        DocumentBlock(
+            type="paragraph",
+            text="can be summarized as follows with several equations below.",
+            page=2,
+            bbox=BoundingBox(50, 312, 286, 324),
+        ),
+    ]
+
+    result = rebuild_paragraphs(blocks, page_sizes={1: (612, 792), 2: (612, 792)})
+
+    assert [block.text for block in result] == [
+        "The module is illustrated in Fig. 2 and",
+        "Figure 3. Diagram",
+        "can be summarized as follows with several equations below.",
+    ]
+
+
 def test_orphan_math_prefix_before_connector_is_removed():
     blocks = [
         block("n Comme n² − n ∼ n² et ln(1 + 1/n) ∼ 1/n,", 100, 112),
@@ -171,6 +226,52 @@ def test_parallel_column_lines_do_not_merge_when_ordered_by_y_then_x():
         "Left-column sentence.",
         "Right-column sentence.",
     ]
+
+
+def test_adjacent_cross_column_lines_do_not_merge_after_hyphenated_tail():
+    blocks = [
+        DocumentBlock(
+            type="paragraph",
+            text="queries to visual prompts that lie in the same visual embed-",
+            page=1,
+            bbox=BoundingBox(309, 678, 545, 690),
+        ),
+        DocumentBlock(
+            type="paragraph",
+            text="the cosine annealing learning rate as recommended in [1] to",
+            page=1,
+            bbox=BoundingBox(50, 690, 286, 702),
+        ),
+    ]
+
+    result = rebuild_paragraphs(blocks)
+
+    assert [block.text for block in result] == [
+        "queries to visual prompts that lie in the same visual embed-",
+        "the cosine annealing learning rate as recommended in [1] to",
+    ]
+
+
+def test_soft_hyphenated_same_column_words_are_repaired():
+    blocks = [
+        DocumentBlock(
+            type="paragraph",
+            text="Figure 2. Structure of queries during train-",
+            page=1,
+            bbox=BoundingBox(309, 620, 545, 631),
+        ),
+        DocumentBlock(
+            type="paragraph",
+            text="ing and evaluation.",
+            page=1,
+            bbox=BoundingBox(309, 631, 377, 642),
+        ),
+    ]
+
+    result = rebuild_paragraphs(blocks)
+
+    assert len(result) == 1
+    assert result[0].text == "Figure 2. Structure of queries during training and evaluation."
 
 
 def test_short_centered_math_fragment_does_not_attach_to_prose_paragraph():

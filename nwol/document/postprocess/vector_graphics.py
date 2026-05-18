@@ -84,8 +84,17 @@ def crop_vector_graphic_label_clusters(
                         if block.bbox is not None
                         and _is_semantic_diagram_text_block(block, drawing_rect)
                     ]
+                    # Also remove table blocks whose center falls inside the graphic region
+                    # (e.g. attention heatmap cells extracted as table artifacts).
+                    table_artifacts = [
+                        block
+                        for block in page_blocks
+                        if block.type == "table"
+                        and block.bbox is not None
+                        and _bbox_center_inside_rect(block.bbox, drawing_rect, margin=20.0)
+                    ]
                     associated_text_blocks = list(
-                        {id(block): block for block in [*labels, *internal_labels, *semantic_diagram_text]}.values()
+                        {id(block): block for block in [*labels, *internal_labels, *semantic_diagram_text, *table_artifacts]}.values()
                     )
                     label_bbox = _union_bbox(labels)
                     rect = drawing_rect
@@ -141,9 +150,36 @@ def crop_vector_graphic_label_clusters(
 
     if not figures:
         return blocks
-    kept = [block for block in blocks if id(block) not in removed_ids]
+    kept = [
+        block
+        for block in blocks
+        if id(block) not in removed_ids and not _is_residual_text_inside_vector_figure(block, figures)
+    ]
     kept.extend(figures)
     return sorted(kept, key=_position_key)
+
+
+def _is_residual_text_inside_vector_figure(block: DocumentBlock, figures: list[DocumentBlock]) -> bool:
+    if block.bbox is None or block.page is None or _is_caption_block(block):
+        return False
+    if block.type not in {"paragraph", "text", "formula", "heading", "subheading", "subsubheading", "table"}:
+        return False
+    if block.type in {"heading", "subheading", "subsubheading"} and _looks_like_real_heading(block.text or ""):
+        return False
+
+    import fitz  # type: ignore
+
+    for figure in figures:
+        if figure.bbox is None or figure.page != block.page:
+            continue
+        rect = fitz.Rect(*figure.bbox.to_list())
+        if not _bbox_center_inside_rect(block.bbox, rect, margin=4.0):
+            continue
+        if block.type == "table":
+            return True
+        if _is_text_inside_graphic(block, rect) or _is_graphic_label_candidate(block):
+            return True
+    return False
 
 
 def _graph_drawing_rects(page: object) -> list[object]:
@@ -170,6 +206,17 @@ def _graph_drawing_rects(page: object) -> list[object]:
         if has_stroke and item_count >= 5 and rect.width >= 80.0 and 30.0 <= rect.height <= 400.0:
             rects.append(rect)
             continue
+        aspect = rect.width / max(rect.height, 1.0)
+        if (
+            has_fill
+            and not has_stroke
+            and item_count <= 3
+            and rect.width >= 70.0
+            and 40.0 <= rect.height <= 260.0
+            and 0.35 <= aspect <= 5.0
+        ):
+            rects.append(rect)
+            continue
         if has_fill and has_stroke and item_count >= 3 and rect.width >= 45.0 and 12.0 <= rect.height <= 90.0:
             compact_shape_rects.append(rect)
 
@@ -179,6 +226,31 @@ def _graph_drawing_rects(page: object) -> list[object]:
             for rect, count in _merge_rects_with_counts(compact_shape_rects, tolerance=128.0)
             if count >= 3
         )
+
+    # Detect dense clusters of small fill-only rectangles (attention heatmaps, confusion matrices).
+    # These are rows of filled cells with no stroke — invisible to the stroke-based logic above.
+    fill_cell_rects = []
+    for drawing in drawings:
+        rect = drawing.get("rect")
+        if rect is None or rect.is_empty:
+            continue
+        drawing_type = str(drawing.get("type") or "")
+        if "f" not in drawing_type or "s" in drawing_type:
+            continue
+        item_count = len(drawing.get("items", []) or [])
+        if item_count <= 3 and 3.0 <= rect.width <= 50.0 and 3.0 <= rect.height <= 80.0:
+            fill_cell_rects.append(rect)
+
+    if len(fill_cell_rects) >= 15:
+        # Compute the bounding box of all fill cells as a single heatmap region.
+        # Using union instead of cluster-merge avoids splitting a single heatmap
+        # whose rows have a vertical gap (e.g. separated by text label rows).
+        heatmap_rect = fill_cell_rects[0]
+        for r in fill_cell_rects[1:]:
+            heatmap_rect = heatmap_rect | r
+        if heatmap_rect.width >= 60.0 and heatmap_rect.height >= 40.0:
+            rects.append(heatmap_rect)
+
     return _merge_rects(rects)
 
 
@@ -615,6 +687,15 @@ def _union_bbox(blocks: list[DocumentBlock]) -> BoundingBox | None:
         elif bbox is None:
             bbox = block.bbox
     return bbox
+
+
+def _bbox_center_inside_rect(bbox: BoundingBox, rect: object, margin: float = 0.0) -> bool:
+    center_x = (bbox.x0 + bbox.x1) / 2.0
+    center_y = (bbox.y0 + bbox.y1) / 2.0
+    return (
+        rect.x0 - margin <= center_x <= rect.x1 + margin
+        and rect.y0 - margin <= center_y <= rect.y1 + margin
+    )
 
 
 def _position_key(block: DocumentBlock) -> tuple[int, float, float]:

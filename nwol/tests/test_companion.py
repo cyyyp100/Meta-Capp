@@ -21,6 +21,7 @@ from db.documents import upsert_document
 from db.schema import initialize_schema
 from db.sessions import start_session
 from db.user import DEFAULT_USER_ID
+from i18n import set_lang
 from reader.state import ReaderState
 
 
@@ -379,3 +380,26 @@ def test_preprocess_paragraph_for_llm_adds_table_and_figure_context():
     assert "[Tableau 2×2 lignes×colonnes]" in context
     assert "| n | u_n |" in context
     assert '[Figure sur cette page : "Figure 1 : Courbe de convergence"]' in context
+
+
+def test_preprocess_paragraph_for_llm_uses_english_context_labels():
+    set_lang("en")
+    try:
+        context = _preprocess_paragraph_for_llm(
+            "The module uses point prompts.",
+            [
+                {
+                    "type": "table",
+                    "markdown": "| n | value |\n| --- | --- |\n| 1 | 2 |",
+                    "metadata": {"rows": 2, "columns": 2},
+                },
+                {"type": "figure", "caption": "Figure 1. Process overview"},
+            ],
+        )
+    finally:
+        set_lang("fr")
+
+    assert "Adjacent context:" in context
+    assert "[Table 2×2 rows×columns]" in context
+    assert '[Figure on this page: "Figure 1. Process overview"]' in context
+    assert "Contexte adjacent" not in context

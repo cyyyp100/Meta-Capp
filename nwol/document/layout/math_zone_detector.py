@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from document.layout.column_detector import detect_columns
+from document.layout.reading_order import order_page_blocks
 from document.models import BoundingBox, RawBlock, RawLine
 
 
@@ -87,6 +89,8 @@ def _has_math_signal(line: RawLine, text: str) -> bool:
     if re.fullmatch(r"n!", text.strip(), re.I):
         return True
     if re.fullmatch(r"[uvw](?:n|_\{?n\}?)?", text.strip(), re.I):
+        return True
+    if re.fullmatch(r"[\])}]+\s*[A-Za-z](?:[_^]\{?[A-Za-z0-9]+\}?)?", text.strip()):
         return True
     if _line_uses_math_font(line) and re.fullmatch(r"[A-Za-z0-9.,;:(){}\[\]\s+\-*/=<>]+", text):
         return True
@@ -311,16 +315,8 @@ def _sort_lines_column_aware(
     for page in sorted(by_page):
         page_lines = by_page[page]
         page_width = page_sizes.get(page, (0.0, 0.0))[0]
-        midpoint = page_width / 2.0 if page_width > 0 else float("inf")
-        left_count = sum(1 for l in page_lines if l.bbox.x0 < midpoint)
-        right_count = sum(1 for l in page_lines if l.bbox.x0 >= midpoint)
-        two_col = page_width > 0 and left_count >= 3 and right_count >= 3
-
-        def sort_key(line: RawLine, _mid: float = midpoint, _two: bool = two_col) -> tuple:
-            col = (1 if line.bbox.x0 >= _mid else 0) if _two else 0
-            return (col, line.bbox.y0, line.bbox.x0)
-
-        result.extend(sorted(page_lines, key=sort_key))
+        layout = detect_columns(page_lines, page_width=page_width)
+        result.extend(order_page_blocks(page_lines, layout))  # type: ignore[arg-type]
     return result
 
 
@@ -338,7 +334,7 @@ def _can_join_display_math_group(line: RawLine, page_width: float | None) -> boo
 
 
 def _looks_like_equation_number(text: str) -> bool:
-    return bool(re.fullmatch(r"\(?\d+(?:\.\d+){1,3}\)?", text.strip()))
+    return bool(re.fullmatch(r"\(?\d+(?:\.\d+){0,3}\)?", text.strip()))
 
 
 def _can_group_equation_number(group: list[RawLine], candidate: RawLine) -> bool:
@@ -366,7 +362,8 @@ def _raw_line_to_block(line: RawLine, block_type: str) -> RawBlock:
 
 
 def _math_group_to_block(group: list[RawLine], block_type: str) -> RawBlock:
-    text = "\n".join(line.text.strip() for line in group if line.text.strip())
+    ordered = _order_math_group_lines(group)
+    text = "\n".join(line.text.strip() for line in ordered if line.text.strip())
     return RawBlock(
         text=text,
         bbox=union_bbox(group),
@@ -374,3 +371,13 @@ def _math_group_to_block(group: list[RawLine], block_type: str) -> RawBlock:
         block_type=block_type,
         lines=group,
     )
+
+
+def _order_math_group_lines(group: list[RawLine]) -> list[RawLine]:
+    if len(group) <= 1:
+        return group
+    bbox = union_bbox(group)
+    max_height = max((line.bbox.height for line in group), default=0.0)
+    if max_height > 0 and bbox.height <= max_height * 2.2:
+        return sorted(group, key=lambda line: line.bbox.x0)
+    return sorted(group, key=lambda line: (line.bbox.y0, line.bbox.x0))

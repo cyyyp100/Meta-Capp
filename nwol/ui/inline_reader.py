@@ -17,6 +17,7 @@ from config.settings import (
     UI_MONO_FONT,
 )
 from document.postprocess.latex_quality import latex_looks_corrupt
+from i18n import t
 from ui import theme
 from ui.components import LoadingState
 from ui.inline_qa_block import QABlock
@@ -33,6 +34,7 @@ _MAX_READER_FORMULA_HEIGHT = 92
 _MAX_READER_FORMULA_CROP_HEIGHT = 200
 _MAX_READER_INLINE_FORMULA_HEIGHT = 42
 _MAX_READER_TABLE_HEIGHT = 260
+_MAX_READER_FIGURE_CROP_HEIGHT = 400
 
 _LATEX_SIGNAL_RE = re.compile(r"\\[A-Za-z]{2,}|\$[^$\n]{1,200}\$")
 _MATH_TEXT_SIGNAL_RE = re.compile(
@@ -456,7 +458,7 @@ class InlineReader(tk.Frame):
         start_index = f"{paragraph['start']}+{start_char}c"
         end_index = f"{paragraph['start']}+{end_char}c"
         original_text = self.text.get(start_index, end_index)
-        placeholder = (placeholder or "réponse masquée temporairement").strip()
+        placeholder = (placeholder or t("qa.mask_placeholder")).strip()
         if not original_text or not placeholder:
             return
 
@@ -516,7 +518,7 @@ class InlineReader(tk.Frame):
         if completion:
             text += f"\n{completion}"
         if verdict == "incorrect" and hint:
-            text += f"\nIndice : {hint}"
+            text += "\n" + t("qa.hint_prefix", text=hint)
         _rich_text_widget(
             content,
             text,
@@ -752,7 +754,7 @@ class InlineReader(tk.Frame):
             replace_range=None,
             on_token=on_token,
             on_complete=on_complete,
-            placeholder_text="Traitement en cours…",
+            placeholder_text=t("reading.processing"),
             placeholder_tag="math_loading",
             insert_initial_text=False,
             append_newline_on_complete=True,
@@ -779,7 +781,7 @@ class InlineReader(tk.Frame):
             block=block,
             image_path=image_path,
             caption=caption,
-            loading_text="Analyse du schéma…",
+            loading_text=t("reading.schema_loading"),
             loading_tag="schema_loading",
             final_tag="schema_description",
             render_async=render_schema_stream_async,
@@ -802,7 +804,7 @@ class InlineReader(tk.Frame):
             block=block,
             image_path=image_path,
             caption=caption,
-            loading_text="Analyse du tableau…",
+            loading_text=t("reading.table_loading"),
             loading_tag="table_loading",
             final_tag="table_description",
             render_async=render_table_stream_async,
@@ -1344,7 +1346,7 @@ class InlineReader(tk.Frame):
                     block,
                     _formula_source_text(block),
                     replace_range=None,
-                    placeholder_text="Traitement en cours...",
+                    placeholder_text=t("reading.processing"),
                     insert_initial_text=False,
                     append_newline_on_complete=True,
                 )
@@ -1481,11 +1483,68 @@ class InlineReader(tk.Frame):
     def _insert_figure(self, block: dict) -> None:
         caption = block.get("caption", "")
         image_path = block.get("image_path")
+        displayed = False
         if image_path:
-            self._insert_image_file(str(image_path), caption_display=False, max_height=_MAX_READER_FIGURE_HEIGHT)
+            displayed = self._insert_image_file(str(image_path), caption_display=False, max_height=_MAX_READER_FIGURE_HEIGHT)
+        if not displayed:
+            crop_path = self._insert_figure_pdf_crop(block)
+            if crop_path:
+                block["image_path"] = crop_path
+                meta = block.get("metadata")
+                if not isinstance(meta, dict):
+                    block["metadata"] = {}
+                block["metadata"]["pdf_cropped"] = True
         caption_display = block.get("caption_display", (block.get("metadata") or {}).get("caption_display", True))
         if caption and caption_display is not False:
             self._write(lambda c=caption: self.text.insert(tk.END, c + "\n", "caption"))
+
+    def _insert_figure_pdf_crop(self, block: dict) -> str | None:
+        """Crop figure region directly from PDF when image_path is missing or invalid."""
+        if not self._pdf_path or not Path(self._pdf_path).exists():
+            return None
+        bbox = block.get("bbox")
+        page_number = block.get("page_number") or block.get("page") or block.get("page_start")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) < 4 or page_number is None:
+            return None
+        try:
+            import fitz
+            from PIL import Image
+
+            page_index = max(0, int(page_number) - 1)
+            with fitz.open(self._pdf_path) as doc:
+                if page_index >= len(doc):
+                    return None
+                page = doc[page_index]
+                rect = fitz.Rect(*(float(v) for v in bbox[:4]))
+                padding = 8.0
+                rect = fitz.Rect(
+                    max(rect.x0 - padding, page.rect.x0),
+                    max(rect.y0 - padding, page.rect.y0),
+                    min(rect.x1 + padding, page.rect.x1),
+                    min(rect.y1 + padding, page.rect.y1),
+                )
+                if rect.is_empty or rect.width <= 10 or rect.height <= 10:
+                    return None
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect, alpha=False)
+                image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+            crops_dir = Path(self._pdf_path).parent / ".figure_crops"
+            crops_dir.mkdir(exist_ok=True)
+            block_id = str(block.get("id") or f"p{page_number}_{id(block)}")
+            safe_id = re.sub(r"[^\w]", "_", block_id)[:60]
+            crop_path = crops_dir / f"{safe_id}.png"
+            image.save(str(crop_path))
+
+            photo = self._photo_from_image(
+                image,
+                max_width=self._available_media_width(),
+                max_height=_MAX_READER_FIGURE_CROP_HEIGHT,
+            )
+            self._insert_photo(photo)
+            return str(crop_path)
+        except Exception as exc:
+            logger.warning("Crop PDF figure indisponible : %s", exc)
+            return None
 
     def _insert_image_file(
         self,
@@ -1640,7 +1699,7 @@ class _ParagraphRephraseWidget(tk.Frame):
         self.configure(height=self._IDLE_HEIGHT)
         btn = tk.Button(
             self,
-            text="↻ Reformuler",
+            text=t("qa.rephrase_btn"),
             command=self._on_click,
             bg=theme.SURFACE,
             fg=theme.MUTED,
@@ -1663,7 +1722,7 @@ class _ParagraphRephraseWidget(tk.Frame):
         self._clear()
         lbl = tk.Label(
             self,
-            text="↻ Reformulation en cours…",
+            text=t("qa.rephrase_loading"),
             bg=theme.SURFACE,
             fg=theme.MUTED,
             font=(theme.FONT_UI, 9, "italic"),
@@ -1907,13 +1966,13 @@ def _formula_source_text(block: dict) -> str:
     if text:
         metadata = block.get("metadata") or {}
         if metadata.get("latex_corrupt") or latex_looks_corrupt(text):
-            return "Formule affichée dans l'image jointe. Transcris uniquement cette formule en LaTeX display."
+            return t("reading.formula_image_prompt")
         stripped = text.strip()
         if stripped.startswith("$$") and stripped.endswith("$$"):
             return stripped
         inner = stripped[1:-1].strip() if stripped.startswith("$") and stripped.endswith("$") else stripped
         return f"$${inner}$$"
-    return "Formule affichée dans l'image jointe. Transcris uniquement cette formule en LaTeX display."
+    return t("reading.formula_image_prompt")
 
 
 def _context_asset_is_unsafe_for_math_render(block: dict) -> bool:

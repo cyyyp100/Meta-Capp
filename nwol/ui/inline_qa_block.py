@@ -5,6 +5,7 @@ import logging
 import time
 import tkinter as tk
 
+from i18n import t
 from ui import theme
 from ui.rich_text import MATH_PATTERN, render_rich_text as _render_rich_text, rich_text_widget as _rich_text_widget
 from ui.top_nav import Tooltip
@@ -77,9 +78,10 @@ class QABlock(tk.Frame):
         self._next_question_status = None
         return True
 
-    def show_loading(self, text: str = "Évaluation en cours…") -> None:
+    def show_loading(self, text: str | None = None) -> None:
         if not self._clear_children():
             return
+        text = text or t("qa.loading_evaluation")
         self._mode = "loading"
         self.configure(bg=QUESTION_BG)
         self._stripe(QUESTION_BORDER)
@@ -93,9 +95,10 @@ class QABlock(tk.Frame):
             pady=14,
         ).pack(anchor="w", fill="x")
 
-    def show_pending_question(self, text: str = "Nouvelle question en préparation…") -> None:
+    def show_pending_question(self, text: str | None = None) -> None:
         if not self.is_alive():
             return
+        text = text or t("qa.pending_question")
         if self._widget_exists(self._feedback_body):
             bg = self.cget("bg")
             if self._widget_exists(self._next_question_status):
@@ -166,7 +169,7 @@ class QABlock(tk.Frame):
         if verdict == "incorrect" and hint:
             _rich_text_widget(
                 body,
-                f"Indice : {hint}",
+                t("qa.hint_prefix", text=hint),
                 bg=bg,
                 fg=TEXT,
                 font=(theme.FONT_UI, 10),
@@ -199,7 +202,7 @@ class QABlock(tk.Frame):
         self._follow_up_answer_frame = answer_frame
         tk.Label(
             answer_frame,
-            text="Réponse",
+            text=t("qa.follow_up_answer_label"),
             bg=bg,
             fg=MUTED,
             font=(theme.FONT_UI, 9, "bold"),
@@ -262,18 +265,18 @@ class QABlock(tk.Frame):
 
         rephrase_btn = theme.make_button(
             actions,
-            text="↻ Autre question",
+            text=t("qa.rephrase_question_btn"),
             command=self._on_rephrase,
             padx=12,
             pady=6,
             kind="warning",
         )
         rephrase_btn.pack(side="left")
-        Tooltip(rephrase_btn, "Générer une nouvelle question")
+        Tooltip(rephrase_btn, t("qa.rephrase_question_tip"))
 
         answer_btn = theme.make_button(
             actions,
-            text="✓ Répondre",
+            text=t("qa.submit_btn"),
             command=self._submit,
             padx=14,
             pady=6,
@@ -281,7 +284,7 @@ class QABlock(tk.Frame):
             font=(theme.FONT_UI, 10, "bold"),
         )
         answer_btn.pack(side="right")
-        Tooltip(answer_btn, "Envoyer la réponse")
+        Tooltip(answer_btn, t("qa.submit_tip"))
 
     def _build_choices(self, parent) -> None:
         choices = self.question.get("choices") or []
@@ -397,7 +400,7 @@ class QABlock(tk.Frame):
         tk.Frame(container, bg=QUESTION_BORDER, height=1).pack(fill="x", pady=(12, 10))
         tk.Label(
             container,
-            text="Poser une question sur ce paragraphe",
+            text=t("qa.follow_up_title"),
             bg=bg,
             fg=MUTED,
             font=(theme.FONT_UI, 9, "bold"),
@@ -430,7 +433,7 @@ class QABlock(tk.Frame):
 
         button = theme.make_button(
             actions,
-            text="Envoyer",
+            text=t("qa.follow_up_send"),
             command=lambda: self._submit_follow_up(on_follow_up),
             padx=12,
             pady=6,
@@ -451,7 +454,7 @@ class QABlock(tk.Frame):
         if self._follow_up_button is not None:
             self._follow_up_button.configure(state=tk.DISABLED)
         if self._follow_up_status is not None:
-            self._follow_up_status.configure(text="Réponse en cours...")
+            self._follow_up_status.configure(text=t("qa.follow_up_loading"))
         on_follow_up(question)
 
     def _answer_text(self) -> str:
@@ -467,27 +470,25 @@ class QABlock(tk.Frame):
 
 
 def _type_hint(qtype: str) -> str:
-    hints = {
-        "open": "Réponds avec tes propres mots.",
-        "comprehension": "Cherche l'information directement dans le passage.",
-        "application": "Applique l'idée du passage à un cas concret ou à un petit calcul.",
-        "visualization": "Décris l'image mentale ou la structure que tu construis.",
-        "metacognition": "Explique comment tu t'y prends pour répondre.",
-        "anticipation": "Formule ce que tu t'attends à voir ensuite.",
-        "curiosity": "Réponds en reliant le point à une question que tu te poses.",
-    }
-    return hints.get(qtype, "")
+    return t(f"qa.hint.{qtype}") if qtype in {
+        "open",
+        "comprehension",
+        "application",
+        "visualization",
+        "metacognition",
+        "anticipation",
+        "curiosity",
+    } else ""
 
 
 def _type_label(qtype: str) -> str:
-    labels = {
-        "qcm": "QCM",
-        "open": "Question ouverte",
-        "comprehension": "Compréhension textuelle",
-        "application": "Application",
-        "curiosity": "Curiosité / induction",
-        "visualization": "Visualisation",
-        "metacognition": "Métacognition",
-        "anticipation": "Anticipation / auto-évaluation",
-    }
-    return labels.get(qtype, "")
+    return t(f"qa.type.{qtype}") if qtype in {
+        "qcm",
+        "open",
+        "comprehension",
+        "application",
+        "curiosity",
+        "visualization",
+        "metacognition",
+        "anticipation",
+    } else ""

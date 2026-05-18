@@ -68,13 +68,33 @@ def postprocess_document_blocks(
         blocks = crop_rule_based_tables(pdf_path, blocks, pages=pages)
         blocks = crop_vector_graphic_label_clusters(pdf_path, blocks, pages=pages)
         blocks = deduplicate_visual_blocks(blocks)
+        blocks = _associate_remaining_visual_captions(blocks, page_sizes=page_sizes)
         blocks = crop_complex_context_blocks(pdf_path, blocks)
 
     blocks = _drop_empty_inert_blocks(blocks)
     if page_sizes:
         blocks = order_blocks_for_reading(blocks, page_sizes)  # type: ignore[arg-type]
+    blocks = rebuild_paragraphs(blocks, page_sizes=page_sizes)
+    blocks = _split_long_reader_paragraphs(blocks)
+    if page_sizes:
+        blocks = order_blocks_for_reading(blocks, page_sizes)  # type: ignore[arg-type]
 
     return normalize_for_learning(blocks)
+
+
+def _associate_remaining_visual_captions(
+    blocks: list[DocumentBlock],
+    *,
+    page_sizes: dict[int, tuple[float, float]] | None = None,
+) -> list[DocumentBlock]:
+    visuals = [block for block in blocks if block.type in {"figure", "table"}]
+    if not visuals:
+        return blocks
+    text_blocks = [block for block in blocks if block.type not in {"figure", "table"}]
+    merged = associate_captions(text_blocks, visuals)
+    if page_sizes:
+        return order_blocks_for_reading(merged, page_sizes)  # type: ignore[arg-type]
+    return merged
 
 
 def _split_long_reader_paragraphs(blocks: list[DocumentBlock]) -> list[DocumentBlock]:

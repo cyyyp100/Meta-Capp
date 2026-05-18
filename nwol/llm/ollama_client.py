@@ -20,6 +20,7 @@ from config.settings import (
     OLLAMA_TIMEOUT,
     OLLAMA_URL,
 )
+from i18n import current_lang, t
 from llm.prompts import (
     build_chapter_summary_prompt,
     build_curiosity_hook_prompt,
@@ -1170,73 +1171,120 @@ def _closed_json_candidate(text: str) -> str:
 
 
 def _fallback_question_from_prompt(prompt: str) -> dict | None:
-    paragraph = _extract_prompt_section(prompt, "Paragraphe à vérifier")
+    english = current_lang() == "en"
+    paragraph = (
+        _extract_prompt_section(prompt, "Paragraphe à vérifier")
+        or _extract_prompt_section(prompt, "Paragraph to assess")
+    )
     paragraph = re.sub(r"\s+", " ", paragraph).strip()
     source_block_id = _extract_source_block_id(prompt)
     topic = _fallback_topic_from_paragraph(paragraph)
-    topic_ref = f"« {topic} »" if topic else ""
+    topic_ref = f'"{topic}"' if english and topic else f"« {topic} »" if topic else ""
     has_math = _looks_like_math(paragraph)
-    has_table = "[Tableau" in paragraph or "|" in paragraph
+    has_table = "[Tableau" in paragraph or "[Table" in paragraph or "|" in paragraph
     has_figure = "[Figure" in paragraph
     existing_question = _extract_first_question(paragraph)
     preferred_type = _extract_preferred_question_type(prompt)
-    if "Stratégie : diversifier les types de questions" in prompt:
+    if "Stratégie : diversifier les types de questions" in prompt or "Strategy : diversify question types" in prompt:
         preferred_type = ""
-    needs_pause_hint = "Attention actuelle sous le seuil 45" in prompt
+    needs_pause_hint = (
+        "Attention actuelle sous le seuil 45" in prompt
+        or "Current attention below threshold 45" in prompt
+    )
 
     if existing_question:
         question_type = "comprehension"
         question = existing_question
-        expected = "Il faut répondre directement à la question présente dans le passage, en s'appuyant sur le texte fourni."
-        criteria = [
-            "Répond à la question du passage",
-            "S'appuie sur les informations disponibles dans le paragraphe",
-        ]
+        if english:
+            expected = "Answer the question present in the passage directly, using the provided text."
+            criteria = ["Answers the passage question", "Uses the information available in the paragraph"]
+        else:
+            expected = "Il faut répondre directement à la question présente dans le passage, en s'appuyant sur le texte fourni."
+            criteria = [
+                "Répond à la question du passage",
+                "S'appuie sur les informations disponibles dans le paragraphe",
+            ]
     elif has_figure:
         question_type = "visualization"
-        if topic_ref:
-            question = f"Que dois-tu observer dans la figure pour comprendre le rôle de {topic_ref} dans ce passage ?"
+        if english:
+            question = (
+                f"What should you observe in the figure to understand the role of {topic_ref} in this passage?"
+                if topic_ref else
+                "What should you observe in the figure to understand the main idea of this passage?"
+            )
+            expected = "Describe the visual element or relationship indicated by the passage and connect it to the main idea."
+            criteria = ["Identifies the relevant visual element", "Connects the representation to the passage idea"]
         else:
-            question = "Que dois-tu observer dans la figure pour comprendre l'idée principale de ce passage ?"
-        expected = "Il faut décrire l'élément visuel ou la relation indiquée par le passage et le relier à l'idée principale."
-        criteria = [
-            "Identifie l'élément visuel pertinent",
-            "Relie la représentation à l'idée du passage",
-        ]
+            if topic_ref:
+                question = f"Que dois-tu observer dans la figure pour comprendre le rôle de {topic_ref} dans ce passage ?"
+            else:
+                question = "Que dois-tu observer dans la figure pour comprendre l'idée principale de ce passage ?"
+            expected = "Il faut décrire l'élément visuel ou la relation indiquée par le passage et le relier à l'idée principale."
+            criteria = [
+                "Identifie l'élément visuel pertinent",
+                "Relie la représentation à l'idée du passage",
+            ]
     elif has_table:
         question_type = "application"
-        if topic_ref:
-            question = f"D'après le tableau, quelle comparaison ou tendance ressort à propos de {topic_ref} ?"
+        if english:
+            question = (
+                f"Based on the table, what comparison or trend stands out about {topic_ref}?"
+                if topic_ref else
+                "Based on the table, what main comparison or trend stands out?"
+            )
+            expected = "Use the table data or trends and connect them to the passage."
+            criteria = ["Identifies a table datum, comparison, or trend", "Connects this observation to the passage idea"]
         else:
-            question = "D'après le tableau, quelle comparaison ou tendance principale ressort ?"
-        expected = "Il faut utiliser les données ou tendances du tableau et les relier au passage."
-        criteria = [
-            "Repère une donnée, une comparaison ou une tendance du tableau",
-            "Relie cette observation à l'idée du passage",
-        ]
+            if topic_ref:
+                question = f"D'après le tableau, quelle comparaison ou tendance ressort à propos de {topic_ref} ?"
+            else:
+                question = "D'après le tableau, quelle comparaison ou tendance principale ressort ?"
+            expected = "Il faut utiliser les données ou tendances du tableau et les relier au passage."
+            criteria = [
+                "Repère une donnée, une comparaison ou une tendance du tableau",
+                "Relie cette observation à l'idée du passage",
+            ]
     elif has_math:
         question_type = "application"
-        if topic_ref:
-            question = f"Dans la formule du passage, que permet d'obtenir ou de comparer {topic_ref} ?"
+        if english:
+            question = (
+                f"In the formula from the passage, what does {topic_ref} help obtain or compare?"
+                if topic_ref else
+                "In the formula from the passage, what does it help obtain or compare?"
+            )
+            expected = "Explain the role of the formula or mathematical notation in the passage's reasoning."
+            criteria = ["Reuses the passage notation correctly", "Explains the formula's role in the reasoning"]
         else:
-            question = "Dans la formule du passage, que permet-on d'obtenir ou de comparer ?"
-        expected = "Il faut expliquer le rôle de la formule ou des notations mathématiques dans le raisonnement du passage."
-        criteria = [
-            "Réutilise correctement les notations du passage",
-            "Explique le rôle de la formule dans le raisonnement",
-        ]
+            if topic_ref:
+                question = f"Dans la formule du passage, que permet d'obtenir ou de comparer {topic_ref} ?"
+            else:
+                question = "Dans la formule du passage, que permet-on d'obtenir ou de comparer ?"
+            expected = "Il faut expliquer le rôle de la formule ou des notations mathématiques dans le raisonnement du passage."
+            criteria = [
+                "Réutilise correctement les notations du passage",
+                "Explique le rôle de la formule dans le raisonnement",
+            ]
     else:
         question_type = "open"
-        if topic_ref:
-            question = f"Quel rôle joue {topic_ref} dans l'idée principale de ce passage ?"
-            expected = f"Il faut expliquer le rôle de {topic_ref} dans le passage, avec ses propres mots."
+        if english:
+            if topic_ref:
+                question = f"What role does {topic_ref} play in the main idea of this passage?"
+                expected = f"Explain the role of {topic_ref} in the passage in your own words."
+            else:
+                question = "What new clarification does this passage add to the main idea?"
+                expected = "Reformulate the central contribution of the passage in your own words."
+            criteria = ["Identifies the central idea", "Uses the passage content"]
         else:
-            question = "Quelle précision nouvelle ce passage ajoute-t-il à l'idée principale ?"
-            expected = "Il faut reformuler l'apport central du passage avec ses propres mots."
-        criteria = [
-            "Repère l'idée centrale",
-            "S'appuie sur le contenu du passage",
-        ]
+            if topic_ref:
+                question = f"Quel rôle joue {topic_ref} dans l'idée principale de ce passage ?"
+                expected = f"Il faut expliquer le rôle de {topic_ref} dans le passage, avec ses propres mots."
+            else:
+                question = "Quelle précision nouvelle ce passage ajoute-t-il à l'idée principale ?"
+                expected = "Il faut reformuler l'apport central du passage avec ses propres mots."
+            criteria = [
+                "Repère l'idée centrale",
+                "S'appuie sur le contenu du passage",
+            ]
     if preferred_type in {"open", "comprehension", "curiosity", "metacognition", "anticipation"} and not existing_question:
         question_type, question, expected, criteria = _fallback_preferred_question(
             preferred_type,
@@ -1249,10 +1297,7 @@ def _fallback_question_from_prompt(prompt: str) -> dict | None:
         "choices": [],
         "expected_answer": expected,
         "evaluation_criteria": criteria,
-        "session_hint": (
-            "Ton attention semble basse : prends une pause courte, puis reviens répondre simplement."
-            if needs_pause_hint else ""
-        ),
+        "session_hint": t("qa.low_attention_hint") if needs_pause_hint else "",
         "source_block_id": source_block_id,
         "paragraph_mask": {"enabled": False},
     })
@@ -1264,7 +1309,7 @@ def _extract_source_block_id(prompt: str) -> str:
 
 
 def _extract_preferred_question_type(prompt: str) -> str:
-    match = re.search(r'Type pédagogique cible\s*:\s*"([^"]+)"', prompt or "")
+    match = re.search(r'(?:Type pédagogique cible|Target pedagogical type)\s*:\s*"([^"]+)"', prompt or "")
     if not match:
         return ""
     value = match.group(1).strip().lower()
@@ -1279,8 +1324,16 @@ def _fallback_preferred_question(
     topic_ref: str,
     paragraph: str,
 ) -> tuple[str, str, str, list[str]]:
-    focus = topic_ref or "l'idée principale du passage"
+    english = current_lang() == "en"
+    focus = topic_ref or ("the main idea of the passage" if english else "l'idée principale du passage")
     if preferred_type == "curiosity":
+        if english:
+            return (
+                "curiosity",
+                f"What new question would you like to explore about {focus}, while staying connected to the passage?",
+                "Formulate a lead or hypothesis grounded in the passage.",
+                ["Formulates a relevant curiosity", "Stays connected to the passage content"],
+            )
         return (
             "curiosity",
             f"Quelle question nouvelle te donne envie d'explorer {focus}, tout en restant liée au passage ?",
@@ -1288,6 +1341,13 @@ def _fallback_preferred_question(
             ["Formule une curiosité pertinente", "Reste relié au contenu du passage"],
         )
     if preferred_type == "metacognition":
+        if english:
+            return (
+                "metacognition",
+                f"How would you check that you really understand {focus}?",
+                "Describe a checking strategy or personal reformulation.",
+                ["Describes a comprehension strategy", "Identifies what needs to be checked"],
+            )
         return (
             "metacognition",
             f"Comment t'y prendrais-tu pour vérifier que tu comprends bien {focus} ?",
@@ -1295,6 +1355,13 @@ def _fallback_preferred_question(
             ["Décrit une stratégie de compréhension", "Identifie ce qui doit être vérifié"],
         )
     if preferred_type == "anticipation":
+        if english:
+            return (
+                "anticipation",
+                f"What point might be difficult in {focus}, and how would you detect it?",
+                "Anticipate a plausible difficulty and propose a concrete cue.",
+                ["Identifies a possible difficulty", "Proposes a sign or method to check it"],
+            )
         return (
             "anticipation",
             f"Quel point pourrait te poser difficulté dans {focus}, et comment le repérerais-tu ?",
@@ -1302,13 +1369,27 @@ def _fallback_preferred_question(
             ["Repère une difficulté possible", "Propose un signe ou une méthode pour la vérifier"],
         )
     if preferred_type == "comprehension":
+        if english:
+            return (
+                "comprehension",
+                f"What explicit information does the passage give about {focus}?",
+                "Extract the information directly provided by the passage.",
+                ["Uses explicit information", "Answers briefly and faithfully"],
+            )
         return (
             "comprehension",
             f"Quelle information explicite le passage donne-t-il sur {focus} ?",
             "Il faut extraire l'information directement fournie par le passage.",
             ["S'appuie sur une information explicite", "Répond de façon courte et fidèle"],
         )
-    topic = topic_ref or _fallback_topic_from_paragraph(paragraph) or "ce passage"
+    topic = topic_ref or _fallback_topic_from_paragraph(paragraph) or ("this passage" if english else "ce passage")
+    if english:
+        return (
+            "open",
+            f"Reformulate in your own words what the passage says about {topic}.",
+            "Reformulate the central idea without copying the text.",
+            ["Reformulates the central idea", "Stays faithful to the passage"],
+        )
     return (
         "open",
         f"Reformule avec tes propres mots ce que le passage affirme sur {topic}.",
@@ -1368,7 +1449,7 @@ def _fallback_topic_from_paragraph(paragraph: str) -> str:
 
 def _clean_paragraph_for_topic(paragraph: str) -> str:
     text = paragraph or ""
-    text = re.sub(r"\[(?:Tableau|Figure)[^\]:]*:\s*([^\]]+)\]", r" \1 ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\[(?:Tableau|Table|Figure|Formule|Formula)[^\]:]*:\s*([^\]]+)\]", r" \1 ", text, flags=re.IGNORECASE)
     text = re.sub(r"\[[^\]]+\]", " ", text)
     text = re.sub(r"\$.*?\$", " ", text)
     text = re.sub(r"\|", " ", text)
@@ -1670,8 +1751,7 @@ def _fallback_meta_questions(previous_questions: list[str] | None = None, seed=N
 
 
 def _extract_prompt_section(prompt: str, title: str) -> str:
-    marker = f"{title} :"
-    start = prompt.find(marker)
+    marker, start = _find_prompt_marker(prompt, title)
     if start == -1:
         return ""
     body = prompt[start + len(marker):]
@@ -1684,11 +1764,18 @@ def _extract_prompt_section(prompt: str, title: str) -> str:
 
 
 def _extract_prompt_json(prompt: str, title: str):
-    marker = f"{title} :"
-    start = prompt.find(marker)
+    marker, start = _find_prompt_marker(prompt, title)
     if start == -1:
         return None
     return _extract_first_json_value(prompt[start + len(marker):])
+
+
+def _find_prompt_marker(prompt: str, title: str) -> tuple[str, int]:
+    for marker in (f"{title} :", f"{title}:"):
+        start = (prompt or "").find(marker)
+        if start != -1:
+            return marker, start
+    return "", -1
 
 
 def _extract_first_json_value(text: str):

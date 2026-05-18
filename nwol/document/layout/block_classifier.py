@@ -151,7 +151,53 @@ def classify_blocks(raw_blocks: list[RawBlock]) -> list[DocumentBlock]:
         for item in _split_embedded_heading_body(block):
             if item.text.strip() or item.type in {"figure", "table"}:
                 classified.append(item)
+    classified = _merge_numbered_heading_fragments(classified)
     return deduplicate_heading_blocks(_mark_caption_continuations(classified))
+
+
+def _merge_numbered_heading_fragments(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
+    result: list[DocumentBlock] = []
+    i = 0
+    while i < len(blocks):
+        current = blocks[i]
+        if i + 1 >= len(blocks):
+            result.append(current)
+            break
+        nxt = blocks[i + 1]
+        if _should_merge_numbered_heading_blocks(current, nxt):
+            result.append(
+                DocumentBlock(
+                    type="heading",
+                    text=f"{current.text.strip()} {nxt.text.strip()}",
+                    page=current.page,
+                    bbox=current.bbox.union(nxt.bbox) if current.bbox and nxt.bbox else current.bbox or nxt.bbox,
+                    level=_heading_level_from_text(f"{current.text.strip()} {nxt.text.strip()}"),
+                    confidence=max(float(current.confidence or 0.0), float(nxt.confidence or 0.0), 0.86),
+                    metadata={**current.metadata, **nxt.metadata, "merged_numbered_heading_fragment": True},
+                )
+            )
+            i += 2
+            continue
+        result.append(current)
+        i += 1
+    return result
+
+
+def _should_merge_numbered_heading_blocks(left: DocumentBlock, right: DocumentBlock) -> bool:
+    if left.page != right.page or left.bbox is None or right.bbox is None:
+        return False
+    if left.type not in {"paragraph", "heading"} or right.type != "heading":
+        return False
+    if not re.fullmatch(r"\d+(?:\.\d+)+\.?", (left.text or "").strip()):
+        return False
+    right_text = (right.text or "").strip()
+    if not right_text or len(right_text.split()) > 10:
+        return False
+    vertical_overlap = min(left.bbox.y1, right.bbox.y1) - max(left.bbox.y0, right.bbox.y0)
+    if vertical_overlap < min(left.bbox.height, right.bbox.height) * 0.55:
+        return False
+    gap = right.bbox.x0 - left.bbox.x1
+    return 0 <= gap <= 64.0
 
 
 def merge_same_line_heading_fragments(raw_blocks: list[RawBlock]) -> list[RawBlock]:
@@ -269,7 +315,7 @@ def classify_block(raw: RawBlock, body_size: float) -> DocumentBlock:
     if (
         _looks_like_side_metadata(raw, text, body_size)
         or _looks_like_inline_metadata(text)
-        or _looks_like_author_metadata(text, page=raw.page)
+        or _looks_like_author_metadata(text, page=raw.page, bbox=raw.bbox, font_size=raw.font_size, body_size=body_size)
     ):
         metadata["is_metadata"] = True
         return DocumentBlock(
@@ -404,7 +450,7 @@ def heading_score(raw: RawBlock, body_size: float) -> float:
     if (
         _looks_like_side_metadata(raw, text, body_size)
         or _looks_like_inline_metadata(text)
-        or _looks_like_author_metadata(text, page=raw.page)
+        or _looks_like_author_metadata(text, page=raw.page, bbox=raw.bbox, font_size=raw.font_size, body_size=body_size)
         or _looks_like_sentence_not_heading(text)
     ):
         return 0.0
@@ -523,12 +569,20 @@ def _looks_like_inline_metadata(text: str) -> bool:
     return bool(EMAIL_RE.search(stripped) or INLINE_METADATA_RE.search(stripped)) and len(stripped) <= 220
 
 
-def _looks_like_author_metadata(text: str, page: int | None = None) -> bool:
+def _looks_like_author_metadata(
+    text: str,
+    page: int | None = None,
+    bbox=None,
+    font_size: float | None = None,
+    body_size: float | None = None,
+) -> bool:
     stripped = re.sub(r"\s+", " ", text or "").strip()
     if not stripped:
         return False
     if CITATION_LINE_RE.search(stripped):
         return False
+    if _looks_like_front_matter_name_or_location(stripped, page=page, bbox=bbox, font_size=font_size, body_size=body_size):
+        return True
     words = re.findall(r"[A-Za-zÀ-ÿ0-9'’.-]+", stripped)
     if len(words) > 32:
         return False
@@ -542,6 +596,34 @@ def _looks_like_author_metadata(text: str, page: int | None = None) -> bool:
         return False
     proper_words = re.findall(r"[A-Z][A-Za-zÀ-ÿ'’-]+", stripped)
     return len(proper_words) >= 4 and not re.search(r"[.!?]$", stripped)
+
+
+def _looks_like_front_matter_name_or_location(
+    text: str,
+    *,
+    page: int | None,
+    bbox,
+    font_size: float | None,
+    body_size: float | None,
+) -> bool:
+    if page is None or int(page or 0) != 1:
+        return False
+    if bbox is None or bbox.y0 > 290.0:
+        return False
+    if font_size and body_size and font_size > body_size * 1.22:
+        return False
+    if _starts_with_heading_keyword(text.casefold()) or re.match(r"^\s*(?:\d+(?:\.\d+)*|[A-Z]\.)\s+", text):
+        return False
+    if re.search(r"[.!?;:]$", text):
+        return False
+
+    words = re.findall(r"[A-Za-zÀ-ÿ'’-]+", text)
+    if not 1 <= len(words) <= 5:
+        return False
+    proper_words = re.findall(r"\b[A-ZÀ-Ÿ][A-Za-zÀ-ÿ'’-]{1,}\b", text)
+    if text.count(",") == 1 and len(proper_words) >= 2:
+        return True
+    return len(words) >= 2 and len(proper_words) == len(words)
 
 
 def _looks_name_or_affiliation_like(text: str) -> bool:

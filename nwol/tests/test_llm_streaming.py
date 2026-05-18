@@ -15,6 +15,7 @@ from llm.ollama_client import (
 )
 from llm.schema_json import parse_evaluation
 from llm.schema_json import parse_flashcard_tags, parse_rephrasing
+from i18n import set_lang
 from llm.prompts import (
     build_evaluation_prompt,
     build_flashcard_tags_prompt,
@@ -105,6 +106,22 @@ def test_question_fallback_uses_application_for_real_formula():
 
     assert fallback["question_type"] == "application"
     assert "formule" in fallback["question"]
+
+
+def test_question_fallback_uses_english_prompt_language():
+    set_lang("en")
+    try:
+        prompt = build_question_prompt(
+            '[Figure on this page: "Figure 1. Process overview"]',
+            preferred_question_type="visualization",
+        )
+        fallback = _fallback_question_from_prompt(prompt)
+    finally:
+        set_lang("fr")
+
+    assert fallback["question_type"] == "visualization"
+    assert fallback["question"].startswith("What should you observe")
+    assert "Que dois-tu" not in fallback["question"]
 
 
 def test_generate_json_repairs_invalid_evaluation_response(monkeypatch):

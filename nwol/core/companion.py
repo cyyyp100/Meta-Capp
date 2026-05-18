@@ -16,6 +16,7 @@ from db.rephrasing import save_rephrasing
 from db.user import DEFAULT_USER_ID
 from document.postprocess.latex_quality import safe_formula_context_text
 from document.postprocess.math_normalizer import normalize_unicode_math
+from i18n import current_lang, t
 from llm.ollama_client import (
     answer_follow_up_async,
     evaluate_answer_async,
@@ -307,7 +308,7 @@ class AdaptiveCompanion:
             return
         if end_char <= start_char:
             return
-        placeholder = paragraph_mask.get("placeholder") or "réponse masquée temporairement"
+        placeholder = paragraph_mask.get("placeholder") or t("qa.mask_placeholder")
         self.on_mask(start_char, end_char, str(placeholder))
 
     def _handle_evaluation(
@@ -534,7 +535,7 @@ def _normalize_paragraph_context(paragraph_scope, state: ReaderState | None) -> 
 
 
 def _paragraph_label(raw_label, block: dict | None, page) -> str:
-    label = str(raw_label or f"Paragraphe p.{page or '?'}").strip()
+    label = str(raw_label or t("qa.paragraph_label", page=page or "?")).strip()
     block_index = _block_index(block)
     if block_index is None or "#" in label:
         return label
@@ -565,6 +566,7 @@ def _paragraph_source_block_id(block: dict | None, page=None, text: str = "") ->
 def _preprocess_paragraph_for_llm(text: str, blocks: list) -> str:
     paragraph = normalize_unicode_math(text or "")
     annotations: list[str] = []
+    english = current_lang() == "en"
 
     for block in blocks or []:
         if not isinstance(block, dict):
@@ -573,31 +575,43 @@ def _preprocess_paragraph_for_llm(text: str, blocks: list) -> str:
         if btype == "figure":
             caption = normalize_unicode_math((block.get("caption") or block.get("text") or "").strip())
             if caption:
-                annotations.append(f'[Figure sur cette page : "{caption}"]')
+                label = "Figure on this page" if english else "Figure sur cette page"
+                separator = ":" if english else " :"
+                annotations.append(f'[{label}{separator} "{caption}"]')
             else:
-                annotations.append("[Figure sur cette page]")
+                annotations.append("[Figure on this page]" if english else "[Figure sur cette page]")
         elif btype == "formula":
             formula = normalize_unicode_math(safe_formula_context_text(block.get("latex") or block.get("text")))
             if formula:
-                annotations.append(f"[Formule affichée : {formula}]")
+                label = "Displayed formula" if english else "Formule affichée"
+                separator = ":" if english else " :"
+                annotations.append(f"[{label}{separator} {formula}]")
             else:
-                annotations.append("[Formule affichée]")
+                annotations.append("[Displayed formula]" if english else "[Formule affichée]")
         elif btype == "table":
             markdown = normalize_unicode_math((block.get("markdown") or block.get("text") or "").strip())
             rows, columns = _table_dimensions(block, markdown)
-            label = f"[Tableau {rows}×{columns} lignes×colonnes]"
+            label = (
+                f"[Table {rows}×{columns} rows×columns]"
+                if english
+                else f"[Tableau {rows}×{columns} lignes×colonnes]"
+            )
             if markdown:
                 annotations.append(f"{label}\n{markdown}")
             else:
                 annotations.append(label)
         for asset in _block_asset_entries(block):
-            reason = asset.get("reason") or "contexte_visuel"
+            reason = asset.get("reason") or ("visual_context" if english else "contexte_visuel")
             page = block.get("page_number") or block.get("page_start") or block.get("page") or "?"
-            annotations.append(f"[Asset visuel joint au modèle : crop PDF page {page}, raison={reason}]")
+            if english:
+                annotations.append(f"[Visual asset attached to the model: PDF crop page {page}, reason={reason}]")
+            else:
+                annotations.append(f"[Asset visuel joint au modèle : crop PDF page {page}, raison={reason}]")
 
     if not annotations:
         return paragraph
-    return "\n\n".join([paragraph, "Contexte adjacent:", *annotations])
+    heading = "Adjacent context:" if english else "Contexte adjacent:"
+    return "\n\n".join([paragraph, heading, *annotations])
 
 
 def _adjacent_context_blocks(current_block: dict | None, all_blocks: list, page_start=None, page_end=None) -> list:
@@ -772,7 +786,7 @@ def _adaptive_session_hint(gauges: dict | None) -> str:
     except (TypeError, ValueError):
         attention = 100.0
     if attention < 45.0:
-        return "Ton attention semble basse : prends une pause courte, puis reviens répondre simplement."
+        return t("qa.low_attention_hint")
     return ""
 
 

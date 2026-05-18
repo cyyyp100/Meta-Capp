@@ -10,6 +10,7 @@ import unicodedata
 from typing import Any
 
 from core.math_text import repair_common_inline_math_artifacts
+from i18n import t
 from metacog.reflection import normalize_meta_cognition_questions
 from utils.flashcard_tags import normalize_flashcard_tags
 
@@ -137,7 +138,7 @@ def parse_question(raw: str | dict) -> dict | None:
     if not _non_empty_str(question) or not _non_empty_str(expected_answer):
         return None
     if not evaluation_criteria:
-        evaluation_criteria = ["Réponse fidèle au passage fourni."]
+        evaluation_criteria = [t("qa.criteria_faithful")]
     # gemma4 envoie des choices même pour les questions non-QCM → on normalise
     if question_type != "qcm":
         choices = []
@@ -654,7 +655,7 @@ def _parse_paragraph_mask(value) -> dict | None:
     if start_char < 0 or end_char <= start_char:
         return None
 
-    placeholder = value.get("placeholder", "réponse masquée temporairement")
+    placeholder = value.get("placeholder", t("qa.mask_placeholder"))
     if not _non_empty_str(placeholder):
         return None
 

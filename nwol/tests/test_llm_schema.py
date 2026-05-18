@@ -1,5 +1,6 @@
 # tests/test_llm_schema.py
 import os
+import random
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -18,7 +19,15 @@ from llm.schema_json import (
     parse_rephrasing,
     parse_session_summary,
 )
-from llm.prompts import build_evaluation_prompt, build_follow_up_prompt, build_question_prompt
+from i18n import set_lang
+from llm.prompts import (
+    build_evaluation_prompt,
+    build_follow_up_prompt,
+    build_question_prompt,
+    build_schema_render_prompt,
+    build_slide_analysis_prompt,
+    build_table_render_prompt,
+)
 
 
 def test_parse_question_valid_open():
@@ -392,6 +401,36 @@ def test_question_prompt_reuses_existing_question_when_present():
     assert "question principale doit être celle du texte d'origine" in prompt
 
 
+def test_question_prompt_english_enforces_user_facing_language():
+    set_lang("en")
+    try:
+        prompt = build_question_prompt(
+            "Figure 1 shows a process with prompts and image embeddings.",
+            preferred_question_type="open",
+        )
+    finally:
+        set_lang("fr")
+
+    assert "Write every user-facing string in English" in prompt
+    assert "Écris tous les champs visibles" not in prompt
+
+
+def test_schema_render_prompt_uses_english_ui_language():
+    set_lang("en")
+    try:
+        prompt = build_schema_render_prompt("Figure 1. Process overview.")
+        slide_prompt = build_slide_analysis_prompt()
+        table_prompt = build_table_render_prompt("Table 1. Results.")
+    finally:
+        set_lang("fr")
+
+    assert "Text in English" in prompt
+    assert "Available caption: Figure 1. Process overview." in prompt
+    assert "Texte en français" not in prompt
+    assert "Text in English" in slide_prompt
+    assert "Table title or caption: Table 1. Results." in table_prompt
+
+
 def test_question_prompt_exposes_pedagogical_type_catalog():
     prompt = build_question_prompt("Ce passage définit une notion puis donne un exemple.")
 
@@ -404,6 +443,7 @@ def test_question_prompt_exposes_pedagogical_type_catalog():
 
 
 def test_question_prompt_uses_gauges_for_adaptive_type():
+    random.seed(0)
     prompt = build_question_prompt(
         "Ce passage définit une méthode complexe.",
         session_gauges={

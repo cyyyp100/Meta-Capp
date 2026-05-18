@@ -264,6 +264,7 @@ Respond only in valid JSON, without Markdown, in the exact format:
 }}
 
 Constraints:
+- Write every user-facing string in English: question, choices, expected_answer, evaluation_criteria, session_hint, and paragraph_mask.placeholder.
 - If question_type is not "qcm", choices must be [].
 - If question_type is "qcm", choices contains 3 or 4 plausible options and expected_answer indicates the correct one.
 - If a target pedagogical type is indicated in the adaptive rules, use that question_type unless clearly incompatible with the paragraph content.
@@ -340,6 +341,7 @@ Réponds uniquement en JSON valide, sans Markdown, au format exact :
 }}
 
 Contraintes :
+- Écris tous les champs visibles par l'utilisateur en français : question, choices, expected_answer, evaluation_criteria, session_hint et paragraph_mask.placeholder.
 - Si question_type ne vaut pas "qcm", choices doit être [].
 - Si question_type vaut "qcm", choices contient 3 ou 4 choix plausibles et expected_answer indique le bon choix.
 - Si un Type pédagogique cible est indiqué dans les règles adaptatives, utilise ce question_type sauf contradiction manifeste avec le contenu du paragraphe.
@@ -1526,6 +1528,27 @@ def _format_chunk_context(previous_context: str, next_context: str) -> str:
 
 
 def build_schema_render_prompt(caption: str = "") -> str:
+    if _i18n.current_lang() == "en":
+        context = f"\nAvailable caption: {caption}" if caption else ""
+        return f"""You are an expert in scientific diagram analysis.
+
+You are given an image of a diagram or chart extracted from a PDF document.{context}
+
+Your task: produce a clear, concise text description of this diagram for a student reading in a text-based viewer.
+
+Rules:
+- Describe what the diagram represents (type: graph, complexity diagram, tree, logical flow, etc.).
+- For a boxes-and-arrows diagram, list only the visible labels in their real order.
+- Do not invent any step, axis, relationship, or word that is not readable in the image.
+- If a label is unreadable, ignore it or simply say that an intermediate step is unreadable.
+- Explain axes, arrows, or relationships only when they are visible.
+- Wrap every mathematical expression in $...$ (inline) or $$...$$ (display).
+- If the diagram shows a complexity order or hierarchy, represent it compactly (e.g. $O(1) \\prec O(\\log n) \\prec O(n) \\prec O(n^2)$).
+- Stay concise: 1 to 3 sentences maximum.
+- Text in English, without Markdown, without any comment before or after.
+
+Respond only with the plain-text description."""
+
     context = f"\nLégende disponible : {caption}" if caption else ""
     return f"""Tu es un expert en analyse de schémas et diagrammes scientifiques.
 
@@ -1548,6 +1571,24 @@ Réponds uniquement avec la description en texte brut."""
 
 
 def build_slide_analysis_prompt() -> str:
+    if _i18n.current_lang() == "en":
+        return """You are an educational assistant analyzing university course slides.
+
+You are given an image of a presentation slide.
+
+Your task: produce a concise educational analysis of this slide to help a student understand and remember its content.
+
+Rules:
+- Summarize the main concept or key message of the slide in one sentence.
+- Identify important points: definitions, formulas, key steps, examples, relationships between concepts.
+- If the slide contains a mathematical formula, wrap it in $...$ (inline) or $$...$$ (display).
+- If the slide shows a graph, schema, or diagram, briefly describe its structure and what it illustrates.
+- If the slide is a title or transition slide, say so simply.
+- Stay concise: 2 to 5 sentences maximum.
+- Text in English, without structured Markdown, without any comment before or after.
+
+Respond only with the plain-text analysis."""
+
     return """Tu es un assistant pédagogique qui analyse des slides de cours universitaires.
 
 Une image d'une slide de présentation t'est fournie.
@@ -1567,6 +1608,23 @@ Réponds uniquement avec l'analyse en texte brut."""
 
 
 def build_table_render_prompt(caption: str = "") -> str:
+    if _i18n.current_lang() == "en":
+        context = f"\nTable title or caption: {caption}" if caption else ""
+        return f"""You are an expert in reading scientific tables extracted from PDFs.
+
+You are given an image of a table extracted from a PDF document.{context}
+
+Your task: faithfully reproduce the table content as readable structured text.
+
+Rules:
+- Present the table with aligned columns separated by | (plain text format).
+- Include the header row if it exists.
+- Wrap every mathematical expression in $...$ (inline).
+- If the table is too wide, summarize it by listing the columns and a few representative rows.
+- Text in English or in the source language, without Markdown, without commentary.
+
+Respond only with the plain-text table."""
+
     context = f"\nTitre ou légende du tableau : {caption}" if caption else ""
     return f"""Tu es un expert en lecture de tableaux scientifiques extraits de PDFs.
 

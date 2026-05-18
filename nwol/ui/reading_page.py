@@ -12,7 +12,7 @@ from config.settings import FIGURE_DISPLAY_PAUSE_MS
 from db.metacog import ensure_profile
 from core.chapter_navigation import normalize_heading_title
 from document.postprocess.latex_quality import safe_formula_context_text
-from i18n import t
+from i18n import current_lang, t
 from llm.ollama_client import generate_chapter_summary_async, generate_rephrasing_async
 from ui import theme
 from ui.gauges_panel import GaugesPanel
@@ -711,7 +711,9 @@ def _block_has_schema(block: dict) -> bool:
     metadata = block.get("metadata") or {}
     if not isinstance(metadata, dict):
         return False
-    if not metadata.get("contains_schema") or not block.get("image_path"):
+    # Accept figures tagged as schema OR PDF-cropped (generated on-the-fly during reading).
+    has_schema = bool(metadata.get("contains_schema") or metadata.get("pdf_cropped"))
+    if not has_schema or not block.get("image_path"):
         return False
     if metadata.get("formula_mode") or metadata.get("contains_inline_math"):
         return False
@@ -735,6 +737,7 @@ def _recent_question_types(history: list[dict]) -> list[str]:
 def _build_section_text(section_blocks: list) -> str:
     """Concatène le texte de tous les blocs d'une section."""
     parts: list[str] = []
+    english = current_lang() == "en"
     for block in section_blocks or []:
         if not isinstance(block, dict):
             continue
@@ -742,18 +745,19 @@ def _build_section_text(section_blocks: list) -> str:
         if btype == "formula":
             text = safe_formula_context_text(block.get("latex") or block.get("text"))
             if text:
-                parts.append(f"[Formule] {text}")
+                parts.append(f"[{'Formula' if english else 'Formule'}] {text}")
             else:
-                parts.append("[Formule affichée]")
+                parts.append("[Displayed formula]" if english else "[Formule affichée]")
         elif btype == "table":
             caption = str(block.get("caption") or "").strip()
             text = str(block.get("markdown") or block.get("text") or "").strip()
+            label = "Table" if english else "Tableau"
             if caption and text:
-                parts.append(f"[Tableau] {caption}\n{text}")
+                parts.append(f"[{label}] {caption}\n{text}")
             elif caption:
-                parts.append(f"[Tableau] {caption}")
+                parts.append(f"[{label}] {caption}")
             elif text:
-                parts.append(f"[Tableau]\n{text}")
+                parts.append(f"[{label}]\n{text}")
         elif btype == "figure":
             caption = str(block.get("caption") or block.get("text") or "").strip()
             parts.append(f"[Figure] {caption}" if caption else "[Figure]")

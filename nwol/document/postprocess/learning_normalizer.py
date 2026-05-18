@@ -87,6 +87,9 @@ def filter_figure_label_fragments(blocks: list[DocumentBlock]) -> list[DocumentB
     """
     result = []
     for block in blocks:
+        if (block.metadata or {}).get("is_metadata"):
+            result.append(block)
+            continue
         bbox = block.bbox
         if bbox is None:
             result.append(block)
@@ -107,6 +110,12 @@ def filter_figure_label_fragments(blocks: list[DocumentBlock]) -> list[DocumentB
                 and len(text) > 0
             ):
                 continue
+            # Drop single-word heading artifacts that look like CamelCase label concatenations
+            # (e.g., "AttentionInput-InputVisualizationsLayer5" from merged figure labels).
+            if block.type == "heading" and " " not in text and len(text) > 20:
+                camel_transitions = len(re.findall(r"[a-z][A-Z]", text))
+                if camel_transitions >= 2:
+                    continue
 
         elif block.type == "table":
             # Drop narrow tables with no numeric data — figure legend grids.
@@ -128,6 +137,7 @@ def normalize_for_learning(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
     blocks = promote_numbered_paragraph_headings(blocks)
     blocks = assign_stable_ids(blocks)
     blocks = fix_wrong_formula_blocks(blocks)
+    blocks = fix_false_headings(blocks)
     blocks = detect_semantic_callouts(blocks)
     blocks = merge_semantic_heading_callouts(blocks)
     blocks = compute_block_confidence(blocks)
@@ -266,8 +276,83 @@ def assign_stable_ids(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
     return blocks
 
 
+_INLINE_MATH_RE = re.compile(r"\$[^$]{1,120}\$")
+_MATH_EXPRESSION_CHARS = frozenset("=+-*/∑∫≤≥∈∉Δαβγλθπφψω()[]{}^_\\|<>")
+_JOURNAL_VOLUME_RE = re.compile(r"\d+\(\d+\)[:\s]\d+[–—\-]\d+")
+
+
+def fix_false_headings(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
+    """Demote heading blocks that are structurally incompatible with real section headings.
+
+    Catches four artifact patterns:
+    - Ends with hyphen: column/page wrap artifacts (body text continues on next block).
+    - Starts with lowercase: continuation fragment of a preceding sentence.
+    - Contains journal volume notation (e.g. "1(2):127–190"): bibliography entry.
+    - Exact duplicate of an adjacent paragraph: fusion deduplication artifact.
+    """
+    para_prefixes: set[str] = set()
+    for block in blocks:
+        if block.type == "paragraph":
+            text = (block.text or "").strip()
+            if len(text) >= 60:
+                para_prefixes.add(text[:60].lower())
+
+    result = []
+    for block in blocks:
+        if block.type != "heading":
+            result.append(block)
+            continue
+
+        text = (block.text or "").strip()
+        if not text:
+            result.append(block)
+            continue
+
+        if text.endswith("-"):
+            block.type = "paragraph"
+            block.metadata.setdefault("corrected_from", "heading")
+            block.metadata.setdefault("detected_as", "column_wrap_fragment")
+            result.append(block)
+            continue
+
+        if text[0].islower():
+            block.type = "paragraph"
+            block.metadata.setdefault("corrected_from", "heading")
+            block.metadata.setdefault("detected_as", "sentence_fragment")
+            result.append(block)
+            continue
+
+        if _JOURNAL_VOLUME_RE.search(text):
+            block.type = "paragraph"
+            block.metadata.setdefault("corrected_from", "heading")
+            block.metadata.setdefault("detected_as", "journal_reference")
+            result.append(block)
+            continue
+
+        if len(text) >= 60 and text[:60].lower() in para_prefixes:
+            continue
+
+        result.append(block)
+
+    return result
+
+
 def fix_wrong_formula_blocks(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
     for block in blocks:
+        # Demote heading blocks that are actually math expressions (contain inline $...$= patterns).
+        # Example: "Attention$(Q, K, V) = s$oftmax(QK^{T}" or "PE$(pos,2i+1) = \cos$(...)".
+        if block.type == "heading":
+            text = (block.text or "").strip()
+            dollar_count = text.count("$")
+            if dollar_count >= 2 and "=" in text:
+                math_chars = sum(1 for ch in text if ch in _MATH_EXPRESSION_CHARS)
+                total_chars = max(len(text), 1)
+                if math_chars / total_chars >= 0.15 or _INLINE_MATH_RE.search(text):
+                    block.type = "paragraph"
+                    block.metadata.setdefault("corrected_from", "heading")
+                    block.metadata.setdefault("detected_as", "inline_formula_expression")
+            continue
+
         if block.type != "formula":
             continue
         text = (block.text or block.latex or "").strip()

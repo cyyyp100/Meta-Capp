@@ -1592,6 +1592,25 @@ def test_figure_caption_association():
     assert text in result
 
 
+def test_multiline_caption_repairs_soft_hyphenation():
+    figure = DocumentBlock(
+        type="figure",
+        image_path="assets/doc/page_1_img_1.png",
+        page=1,
+        bbox=BoundingBox(100, 100, 400, 300),
+    )
+    caption_head = block("Figure 2. Structure of queries during train-", y0=310, y1=321)
+    caption_tail = block("ing and evaluation.", y0=322, y1=333)
+    caption_tail.metadata["is_caption"] = True
+
+    result = associate_captions([caption_head, caption_tail], [figure])
+
+    figures = [item for item in result if item.type == "figure"]
+    assert figures[0].caption == "Figure 2. Structure of queries during training and evaluation."
+    assert caption_head not in result
+    assert caption_tail not in result
+
+
 def test_shared_caption_for_image_group_is_kept_once_for_display():
     upper = DocumentBlock(
         type="figure",

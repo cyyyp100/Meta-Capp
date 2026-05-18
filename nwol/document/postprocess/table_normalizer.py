@@ -451,11 +451,13 @@ def _block_belongs_to_rule_based_table(
         return False
     if caption is not None and id(block) == id(caption):
         return True
-    if block.type in {"formula", "figure", "table"}:
+    if block.type in {"figure", "table"}:
         return False
     bbox = block.bbox
     expanded = BoundingBox(table_bbox.x0 - 8.0, table_bbox.y0 - 8.0, table_bbox.x1 + 8.0, table_bbox.y1 + 8.0)
     center_inside = expanded.x0 <= bbox.center_x <= expanded.x1 and expanded.y0 <= bbox.center_y <= expanded.y1
+    if block.type == "formula":
+        return center_inside or _bbox_overlap_ratio(bbox, expanded) > 0.45
     if center_inside:
         return True
     if _bbox_overlap_ratio(bbox, expanded) > 0.35:
