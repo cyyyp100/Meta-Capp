@@ -680,7 +680,7 @@ def _course_search_text(
 
 
 def get_quiz_base_questions(
-    user_id: int = 1, n: int = 10, subject: str | None = None
+    user_id: int = 1, n: int = 10, subject: str | None = None, shuffle: bool = False
 ) -> list[dict]:
     """Questions de lecture (``scope_type='page'``) pour une session de quiz.
 
@@ -690,6 +690,11 @@ def get_quiz_base_questions(
     (borné par ``n``). Les types survivent au passage — le quiz les rejoue tels
     quels (cf. `services.quiz.build_quiz`), et pas uniquement en QCM. On priorise les questions déjà ratées puis les plus
     récentes. ``document_id`` est exposé pour permettre le deep-link vers le reader.
+
+    ``shuffle`` échange cette priorité contre un tirage aléatoire. C'est ce que
+    demande la pratique entrelacée : « ratées d'abord, puis les plus récentes »
+    concentre la session sur le dernier document lu, donc sur un seul domaine —
+    exactement ce que l'alternance cherche à éviter.
     """
     conn = get_connection()
     params: list = [user_id]
@@ -706,6 +711,7 @@ def get_quiz_base_questions(
         where_type = f"AND COALESCE(q.question_type, '') NOT IN ({placeholders})"
         params.extend(excluded)
     params.append(n)
+    order_by = "RANDOM()" if shuffle else "failed DESC, q.created_at DESC"
     rows = conn.execute(
         f"""
         SELECT q.id, q.question, q.choices_json, q.answer, q.question_type,
@@ -726,7 +732,7 @@ def get_quiz_base_questions(
           {where_subject}
           {where_type}
         GROUP BY q.id
-        ORDER BY failed DESC, q.created_at DESC
+        ORDER BY {order_by}
         LIMIT ?
         """,
         params,

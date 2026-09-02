@@ -1,8 +1,9 @@
 # services/library.py — Documents, pages et images (lecture).
 #
 # Frontière entre le frontend/serveur et le stockage des documents + le rendu
-# PyMuPDF. Renvoie des dicts JSON-sérialisables ; les coordonnées de recherche
-# sont en POINTS PDF (le client met à l'échelle selon le zoom d'affichage).
+# PDFium. Renvoie des dicts JSON-sérialisables ; les coordonnées de recherche
+# sont en POINTS PDF, origine haut-gauche (le client met à l'échelle selon le
+# zoom d'affichage) — voir pdf_viewer/pdf_document.py pour la convention.
 from __future__ import annotations
 
 import os
@@ -126,7 +127,7 @@ def render_page(doc_id: int, page: int, zoom: float = 2.5) -> str | None:
 # Cache du texte de page : {(doc_id, page): (mtime, texte)}, borné, FIFO.
 # `page_text` est appelé plusieurs fois par question (contexte LLM, masque,
 # densité mathématique du tick d'intervention toutes les 5 s) et chaque appel
-# rouvrait le PDF entier via fitz. Le mtime garde le cache honnête si le
+# rouvrait le PDF entier via PDFium. Le mtime garde le cache honnête si le
 # document est modifié ou réimporté sous le même chemin.
 _PAGE_TEXT_CACHE: OrderedDict[tuple[int, int], tuple[float, str]] = OrderedDict()
 _PAGE_TEXT_CACHE_MAX = 128

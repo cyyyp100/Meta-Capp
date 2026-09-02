@@ -28,17 +28,10 @@ def test_quiz_answer_moves_permanent_retention(client):
     assert bad < good
 
 
-def test_import_pdf(client, tmp_path):
-    import fitz
+def test_import_pdf(client, tmp_path, make_pdf):
+    pdf_path = make_pdf(tmp_path / "mini.pdf", ["Bonjour Meta-Capp"])
 
-    pdf_path = tmp_path / "mini.pdf"
-    doc = fitz.open()
-    page = doc.new_page()
-    page.insert_text((72, 72), "Bonjour Meta-Capp")
-    doc.save(str(pdf_path))
-    doc.close()
-
-    resp = client.post("/api/library/import", json={"path": str(pdf_path)})
+    resp = client.post("/api/library/import", json={"path": pdf_path})
     assert resp.status_code == 200
     detail = resp.json()
     assert detail["page_count"] == 1

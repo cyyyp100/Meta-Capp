@@ -1,7 +1,7 @@
 # pdf_viewer/chapter_index.py — Détection des chapitres (sommaire natif + taille de police)
 #
 # Approche volontairement légère et sans dépendance supplémentaire :
-#   1. Sommaire natif PyMuPDF (instantané, fiable quand présent).
+#   1. Sommaire natif du PDF (instantané, fiable quand présent).
 #   2. Sinon, heuristique par taille de police (titres = lignes nettement plus
 #      grandes que le corps, hors lignes de données / citations).
 #   3. Sinon, pseudo-chapitres « Pages N–M ».

@@ -7,7 +7,7 @@
 # devient UN bloc de type "code" — rendu monospace + numéros de ligne côté client.
 #
 # Aucune reconstruction, aucun appel réseau : le contenu est relu à la demande
-# depuis le chemin d'origine (même politique que le rendu PyMuPDF des PDF).
+# depuis le chemin d'origine (même politique que le rendu PDFium des PDF).
 from __future__ import annotations
 
 import math

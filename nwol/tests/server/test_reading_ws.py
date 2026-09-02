@@ -247,7 +247,7 @@ def test_reader_ws_persists_free_qa(client, monkeypatch):
     from db.questions import get_questions_for_scope
     from services import assistant
 
-    doc_id = upsert_document("/tmp/persist_qa.pdf", "persist_qa.pdf", 10, "pymupdf", False)
+    doc_id = upsert_document("/tmp/persist_qa.pdf", "persist_qa.pdf", 10, "pdfium", False)
 
     monkeypatch.setattr(
         assistant, "answer_question",
@@ -293,7 +293,7 @@ def test_reader_ws_qa_creates_auto_flashcard(client, monkeypatch):
     from db.flashcards import get_flashcards
     from services import assistant
 
-    doc_id = upsert_document("/tmp/fc_auto.pdf", "fc_auto.pdf", 5, "pymupdf", False)
+    doc_id = upsert_document("/tmp/fc_auto.pdf", "fc_auto.pdf", 5, "pdfium", False)
 
     monkeypatch.setattr(
         assistant, "generate_page_question",

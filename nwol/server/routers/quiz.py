@@ -82,12 +82,15 @@ def questions(
     subject: str | None = None,
     n: int = QUIZ_DEFAULT_QUESTIONS,
     topic: str | None = None,
+    interleaved: bool = False,
 ) -> list[dict]:
     """Construit une session de QCM (un seul appel LLM batch pour les distracteurs).
 
     `topic` : sujet libre tapé par l'apprenant, qui cible aussi le cours d'origine
-    des questions. `n` : longueur de session, bornée par le service."""
-    return build_quiz(subject, n, topic=topic)
+    des questions. `n` : longueur de session, bornée par le service.
+    `interleaved` : pratique entrelacée — tirage alterné dans tous les domaines,
+    qui rend `subject` et `topic` sans objet (le service les ignore)."""
+    return build_quiz(subject, n, topic=topic, interleaved=interleaved)
 
 
 @router.post("/answer")

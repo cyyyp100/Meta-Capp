@@ -41,7 +41,7 @@ export interface WhyContent {
   sources: string[];
 }
 
-export type WhyKey = "entry" | "warmup" | "exit" | "postExitRest";
+export type WhyKey = "entry" | "warmup" | "exit" | "postExitRest" | "interleaving";
 
 const referencesFr: ScienceReference[] = [
   {
@@ -97,6 +97,24 @@ const referencesFr: ScienceReference[] = [
     authors: "Taylor, K., & Rohrer, D. (2010)",
     detail: "The Effects of Interleaved Practice. Applied Cognitive Psychology, 24(6), 837-848.",
     doi: "10.1002/acp.1598",
+  },
+  {
+    authors: "Rohrer, D., & Taylor, K. (2007)",
+    detail:
+      "The Shuffling of Mathematics Problems Improves Learning. Instructional Science, 35(6), 481-498. Étude fondatrice du mélange des exercices : l'entraînement est plus laborieux, le test différé bien meilleur.",
+    doi: "10.1007/s11251-007-9015-8",
+  },
+  {
+    authors: "Birnbaum, M. S., Kornell, N., Bjork, E. L., & Bjork, R. A. (2013)",
+    detail:
+      "Why Interleaving Enhances Inductive Learning: The Roles of Discrimination and Retrieval. Memory & Cognition, 41(3), 392-402. Le mécanisme proposé : alterner oblige à distinguer les catégories entre elles et à retrouver la bonne stratégie à chaque fois.",
+    doi: "10.3758/s13421-012-0272-7",
+  },
+  {
+    authors: "Rohrer, D., Dedrick, R. F., & Stershic, S. (2015)",
+    detail:
+      "Interleaved Practice Improves Mathematics Learning. Journal of Educational Psychology, 107(3), 900-908. Essai en classe : à volume d'exercices égal, alterner les types de problèmes a plus que doublé le score au test différé.",
+    doi: "10.1037/edu0000001",
   },
   {
     authors: "Bjork, E. L., & Bjork, R. A. (2011)",
@@ -188,6 +206,24 @@ const referencesEn: ScienceReference[] = [
     authors: "Taylor, K., & Rohrer, D. (2010)",
     detail: "The Effects of Interleaved Practice. Applied Cognitive Psychology, 24(6), 837-848.",
     doi: "10.1002/acp.1598",
+  },
+  {
+    authors: "Rohrer, D., & Taylor, K. (2007)",
+    detail:
+      "The Shuffling of Mathematics Problems Improves Learning. Instructional Science, 35(6), 481-498. The founding study on shuffling exercises: practice feels harder, the delayed test is far better.",
+    doi: "10.1007/s11251-007-9015-8",
+  },
+  {
+    authors: "Birnbaum, M. S., Kornell, N., Bjork, E. L., & Bjork, R. A. (2013)",
+    detail:
+      "Why Interleaving Enhances Inductive Learning: The Roles of Discrimination and Retrieval. Memory & Cognition, 41(3), 392-402. The proposed mechanism: alternating forces you to tell categories apart and to retrieve the right strategy every time.",
+    doi: "10.3758/s13421-012-0272-7",
+  },
+  {
+    authors: "Rohrer, D., Dedrick, R. F., & Stershic, S. (2015)",
+    detail:
+      "Interleaved Practice Improves Mathematics Learning. Journal of Educational Psychology, 107(3), 900-908. Classroom trial: for the same number of exercises, interleaving problem types more than doubled the delayed test score.",
+    doi: "10.1037/edu0000001",
   },
   {
     authors: "Bjork, E. L., & Bjork, R. A. (2011)",
@@ -605,6 +641,21 @@ export const whyContent: Record<Lang, Record<WhyKey, WhyContent>> = {
         "Meta-Capp n'impose pas 10 minutes : il garde une version courte de 60 secondes, sans nouvelle stimulation, pour fermer la session proprement.",
       sources: ["Dewar et al. (2012)"],
     },
+    interleaving: {
+      title: "Pourquoi mélanger les domaines ?",
+      principle:
+        "Rohrer et Taylor ont comparé deux entraînements de même volume : l'un groupé par type de problème, l'autre mélangé. Birnbaum et al. expliquent le mécanisme — alterner oblige à distinguer les catégories entre elles et à retrouver la bonne stratégie à chaque question, au lieu de la réappliquer par inertie.",
+      conclusion:
+        "L'entraînement mélangé donne de moins bons résultats sur le moment, et de bien meilleurs au test différé : chez Rohrer, Dedrick & Stershic, le score final a plus que doublé. La difficulté ressentie est le signe que la mémoire travaille, pas qu'elle échoue.",
+      inApp:
+        "Meta-Capp tire alors les questions au hasard dans toute ta base et sert un domaine différent à chaque question. Matière et sujet sont désactivés — s'y tenir est précisément ce que l'alternance évite ; seule la longueur de la session reste réglable.",
+      sources: [
+        "Rohrer, Dedrick & Stershic (2015)",
+        "Taylor & Rohrer (2010)",
+        "Birnbaum et al. (2013)",
+        "Rohrer & Taylor (2007)",
+      ],
+    },
   },
   en: {
     entry: {
@@ -644,6 +695,21 @@ export const whyContent: Record<Lang, Record<WhyKey, WhyContent>> = {
       inApp:
         "Meta-Capp does not impose 10 minutes: it keeps a short 60-second version, without new stimulation, to close the session cleanly.",
       sources: ["Dewar et al. (2012)"],
+    },
+    interleaving: {
+      title: "Why mix the subjects up?",
+      principle:
+        "Rohrer and Taylor compared two practice sets of equal size: one blocked by problem type, one shuffled. Birnbaum et al. explain the mechanism — alternating forces you to tell categories apart and to retrieve the right strategy for every question, instead of reapplying it out of inertia.",
+      conclusion:
+        "Interleaved practice looks worse at the time and turns out far better on the delayed test: in Rohrer, Dedrick & Stershic the final score more than doubled. The extra effort is the sign that memory is working, not failing.",
+      inApp:
+        "Meta-Capp then draws questions at random from your whole database and serves a different domain with each question. Subject and topic are disabled — sticking to one is exactly what interleaving avoids; only the session length stays adjustable.",
+      sources: [
+        "Rohrer, Dedrick & Stershic (2015)",
+        "Taylor & Rohrer (2010)",
+        "Birnbaum et al. (2013)",
+        "Rohrer & Taylor (2007)",
+      ],
     },
   },
 };

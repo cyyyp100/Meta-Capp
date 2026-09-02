@@ -2,7 +2,7 @@
 #
 # Quand l'étudiant pose une question à la bulle Gemma, le contexte LLM ne contient
 # que la page visible. Ce module fournit un RAG léger sur le MÊME document : on
-# indexe paresseusement le texte PyMuPDF de toutes les pages, puis on renvoie les
+# indexe paresseusement le texte PDFium de toutes les pages, puis on renvoie les
 # quelques passages (hors page courante) qui matchent les mots-clés de la question.
 #
 # Cohérent avec services/brainstorm_search.py : pas d'embeddings ni de FTS5 — on

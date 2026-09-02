@@ -2,7 +2,7 @@ def test_reader_highlights_crud(client):
     # Cycle complet : liste vide -> création -> relecture -> suppression.
     from db.documents import upsert_document
 
-    doc_id = upsert_document("/tmp/hl.pdf", "hl.pdf", 3, "pymupdf", False)
+    doc_id = upsert_document("/tmp/hl.pdf", "hl.pdf", 3, "pdfium", False)
 
     assert client.get(f"/api/library/doc/{doc_id}/highlights").json() == []
 
@@ -30,7 +30,7 @@ def test_answer_context_includes_user_highlights(client):
     from db.reader_highlights import add_highlight
     from services.assistant import build_answer_context
 
-    doc_id = upsert_document("/tmp/hl2.pdf", "hl2.pdf", 3, "pymupdf", False)
+    doc_id = upsert_document("/tmp/hl2.pdf", "hl2.pdf", 3, "pdfium", False)
     add_highlight(doc_id, 1, "passage surligné par l'étudiant", [[1, 2, 3, 4]])
 
     ctx = build_answer_context(doc_id, 1, "Une question")
@@ -42,7 +42,7 @@ def test_highlight_color_is_validated(client):
     from db.documents import upsert_document
     from db.reader_highlights import add_highlight, list_highlights
 
-    doc_id = upsert_document("/tmp/hl3.pdf", "hl3.pdf", 3, "pymupdf", False)
+    doc_id = upsert_document("/tmp/hl3.pdf", "hl3.pdf", 3, "pdfium", False)
     add_highlight(doc_id, 1, "abc", [[0, 0, 1, 1]], color="rainbow")
     items = list_highlights(doc_id)
     assert items[0]["color"] == "key"

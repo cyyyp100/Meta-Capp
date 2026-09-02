@@ -115,11 +115,14 @@ export const api = {
   // `topic` : sujet libre de la session (« capitales », « révolution française »).
   // `n` omis = longueur par défaut du serveur (cf. /api/quiz/options) : l'UI ne
   // recopie pas une valeur que `config/settings.py` déclare déjà.
-  quizQuestions: (n?: number, subject?: string, topic?: string) => {
+  // `interleaved` : pratique entrelacée. Le serveur ignore alors `subject` et
+  // `topic` — l'UI les vide de son côté, mais l'exclusivité est sa règle à lui.
+  quizQuestions: (n?: number, subject?: string, topic?: string, interleaved?: boolean) => {
     const params = new URLSearchParams();
     if (n) params.set("n", String(n));
     if (subject) params.set("subject", subject);
     if (topic?.trim()) params.set("topic", topic.trim());
+    if (interleaved) params.set("interleaved", "true");
     return getJSON<QuizQuestion[]>(`/api/quiz/questions?${params}`);
   },
   submitQuizAnswer: (category: string | null, correct: boolean, verdict?: string) =>

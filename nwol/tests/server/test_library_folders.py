@@ -15,7 +15,7 @@ def _create(client, name, parent_id=None):
 def _document(client, filename="cours.pdf"):
     from db.documents import upsert_document
 
-    return upsert_document(f"/tmp/{filename}", filename, 10, "pymupdf_scroll", False)
+    return upsert_document(f"/tmp/{filename}", filename, 10, "pdfium_scroll", False)
 
 
 def test_folders_start_empty(client):

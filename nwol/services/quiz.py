@@ -71,6 +71,7 @@ def build_quiz(
     n: int = QUIZ_DEFAULT_QUESTIONS,
     user_id: int = DEFAULT_USER_ID,
     topic: str | None = None,
+    interleaved: bool = False,
 ) -> list[dict]:
     """Construit une session de quiz : questions de lecture + catalogue statique.
 
@@ -79,24 +80,29 @@ def build_quiz(
     autant que selon leur énoncé (cf. ``course_search``). ``n`` est la longueur de
     session demandée, bornée par `config.settings`.
 
+    ``interleaved`` est la **pratique entrelacée** : un tirage aléatoire dans toute
+    la base, alterné d'un domaine à l'autre (cf. :func:`_interleave_by_category`).
+    Ce mode ignore délibérément ``subject`` et ``topic`` — s'en tenir à une matière
+    ou à un thème est exactement ce qu'il s'agit de ne pas faire. L'exclusivité est
+    tranchée ici, et pas seulement grisée dans l'UI.
+
     Les questions de lecture passent d'abord ; le catalogue statique complète
     jusqu'à ``n`` — sinon une base neuve, ou un thème sans document importé,
     n'aurait aucun quiz à jouer.
-
-    **Chaque question garde le type sous lequel elle a été posée pendant la
-    lecture**, et donc son widget de réponse (`config.question_types.widget`) :
-    QCM et ordre de grandeur en liste de choix, remise en ordre en étapes à
-    replacer, tout le reste en réponse rédigée corrigée par
-    :func:`evaluate_quiz_answer`. Transformer d'office ces types en QCM — ce que
-    faisait le quiz — affichait « explique à un débutant » au-dessus de quatre
-    boutons, et réduisait toute session à un questionnaire à choix multiples.
-
-    Seuls les types à liste de choix passent donc par le LLM, en **un seul** appel
-    batch, pour compléter leurs distracteurs (4 choix mélangés dont la bonne
-    réponse). Faute de choix constructibles, la question redevient une question à
-    rédiger si une réponse existe, sinon elle est écartée.
     """
     count = clamp_quiz_length(n)
+    if interleaved:
+        # Même raison qu'un sujet libre : l'alternance se décide EN PYTHON, donc on
+        # charge un lot borné (`QUIZ_SEARCH_POOL`) au lieu de laisser le LIMIT SQL
+        # trancher avant. Le catalogue statique entre dans le vivier — il couvre à
+        # lui seul plusieurs domaines, ce qui rend l'alternance possible même quand
+        # un seul document a été importé.
+        return _assemble_quiz(_interleave_by_category(
+            get_quiz_base_questions(user_id, QUIZ_SEARCH_POOL, None, shuffle=True)
+            + get_static_quiz_questions(QUIZ_SEARCH_POOL),
+            count,
+        ))
+
     terms = _topic_terms(topic)
     # Avec un sujet libre, le filtrage se fait EN PYTHON (accents pliés) : on charge
     # un lot borné au lieu de laisser le LIMIT SQL trancher avant le filtre.
@@ -111,7 +117,28 @@ def build_quiz(
         base.extend(static[:missing])
     if not base:
         return []
+    return _assemble_quiz(base)
 
+
+def _assemble_quiz(base: list[dict]) -> list[dict]:
+    """Questions sélectionnées → session jouable : widgets, distracteurs, format.
+
+    Commun à tous les modes de sélection : c'est la sélection qui varie (matière,
+    sujet libre, pratique entrelacée), pas la mise en forme.
+
+    **Chaque question garde le type sous lequel elle a été posée pendant la
+    lecture**, et donc son widget de réponse (`config.question_types.widget`) :
+    QCM et ordre de grandeur en liste de choix, remise en ordre en étapes à
+    replacer, tout le reste en réponse rédigée corrigée par
+    :func:`evaluate_quiz_answer`. Transformer d'office ces types en QCM — ce que
+    faisait le quiz — affichait « explique à un débutant » au-dessus de quatre
+    boutons, et réduisait toute session à un questionnaire à choix multiples.
+
+    Seuls les types à liste de choix passent donc par le LLM, en **un seul** appel
+    batch, pour compléter leurs distracteurs (4 choix mélangés dont la bonne
+    réponse). Faute de choix constructibles, la question redevient une question à
+    rédiger si une réponse existe, sinon elle est écartée.
+    """
     # 1) Préparation par widget. Les listes de choix déjà valides (≥4 dont la
     #    réponse) sont réutilisées telles quelles ; les autres partent au LLM pour
     #    leurs distracteurs. Une remise en ordre garde ses étapes — elles SONT la
@@ -438,6 +465,43 @@ def _rank_by_topic(items: list[dict], terms: list[str]) -> list[dict]:
     ]
     scored.sort(key=lambda row: (-row[0], row[1]))
     return [q for (_hits, _rank, q) in scored]
+
+
+def _interleave_by_category(items: list[dict], count: int) -> list[dict]:
+    """``count`` questions tirées à tour de rôle dans chaque domaine disponible.
+
+    C'est la pratique entrelacée : deux questions voisines viennent de domaines
+    différents tant qu'il reste des domaines à servir. Prendre les ``count``
+    premières d'une liste mélangée ne suffirait pas — un domaine bien fourni
+    raflerait la session par la seule loi des grands nombres.
+
+    L'ordre des paquets est mélangé pour qu'un même domaine n'ouvre pas toutes
+    les sessions. À l'intérieur d'un paquet, l'ordre reçu est conservé : comme
+    l'appelant concatène les questions de lecture avant le catalogue statique,
+    le matériel de l'apprenant passe en premier et le catalogue ne sert qu'à
+    garantir la diversité.
+    """
+    buckets: dict[str, list[dict]] = {}
+    for q in items:
+        buckets.setdefault(q.get("category") or "culture", []).append(q)
+
+    order = list(buckets)
+    random.shuffle(order)
+
+    picked: list[dict] = []
+    while len(picked) < count:
+        drained = True
+        for category in order:
+            bucket = buckets[category]
+            if not bucket:
+                continue
+            picked.append(bucket.pop(0))
+            drained = False
+            if len(picked) >= count:
+                break
+        if drained:  # tous les domaines épuisés avant `count`
+            break
+    return picked
 
 
 def _evaluation(

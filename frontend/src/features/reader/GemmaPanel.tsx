@@ -406,14 +406,17 @@ export function GemmaPanel({
           <div className="gemma-nodrag" style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {/* Le <select> natif affichait « discret / normal / coach » bruts, non
                 traduits, et non stylables. Chaque mode explique maintenant ce
-                qu'il change. */}
+                qu'il change — mais seulement pendant le choix : `SelectValue`
+                recopierait sinon l'explication dans le bouton fermé, qui
+                mangeait la moitié de l'en-tête. Ses enfants explicites
+                réduisent le bouton au seul nom du mode. */}
             <Select value={mode} onValueChange={(v) => changeMode(v as (typeof MODES)[number])}>
               <SelectTrigger
                 size="sm"
                 aria-label={t("gemma.mode_label")}
                 className="h-7 w-auto gap-1 border-border bg-surface text-[11px]"
               >
-                <SelectValue />
+                <SelectValue>{t(`gemma.mode_${mode}`)}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {MODES.map((m) => (

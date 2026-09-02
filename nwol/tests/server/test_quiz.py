@@ -498,6 +498,49 @@ def test_topic_without_any_match_returns_nothing(client, monkeypatch):
     assert client.get("/api/quiz/questions", params={"topic": "cryptozoologie"}).json() == []
 
 
+# ── Pratique entrelacée ─────────────────────────────────────────────────────
+
+def test_interleaved_alternates_between_domains(client, monkeypatch):
+    """Deux questions voisines viennent de domaines différents.
+
+    C'est tout l'intérêt du mode : prendre les n premières d'un tirage aléatoire
+    laisserait un domaine bien fourni rafler la session."""
+    monkeypatch.setattr("services.quiz.generate_quiz_distractors_async", _fake_distractors)
+    _seed_subject_questions("physique")
+    _seed_subject_questions("histoire")
+
+    quiz = client.get("/api/quiz/questions", params={"n": 6, "interleaved": "true"}).json()
+    assert len(quiz) == 6
+    categories = [q["category"] for q in quiz]
+    assert len(set(categories)) > 1
+    # Le catalogue statique couvre à lui seul plusieurs domaines : il y a toujours
+    # de quoi alterner, donc aucun doublon consécutif n'est excusable ici.
+    assert all(a != b for a, b in zip(categories, categories[1:]))
+
+
+def test_interleaved_ignores_subject_and_topic(client, monkeypatch):
+    """L'exclusivité est une règle serveur, pas seulement un grisage d'UI."""
+    monkeypatch.setattr("services.quiz.generate_quiz_distractors_async", _fake_distractors)
+    _seed_subject_questions("physique")
+
+    quiz = client.get(
+        "/api/quiz/questions",
+        params={"n": 6, "interleaved": "true", "subject": "physique", "topic": "capitale"},
+    ).json()
+    assert len(quiz) == 6
+    # Ni le filtre de matière ni le filtre de sujet n'a réduit la session.
+    assert len({q["category"] for q in quiz}) > 1
+
+
+def test_interleaved_honours_the_requested_length(client, monkeypatch):
+    """Le nombre de questions reste le seul réglage disponible dans ce mode."""
+    monkeypatch.setattr("services.quiz.generate_quiz_distractors_async", _fake_distractors)
+
+    assert len(client.get(
+        "/api/quiz/questions", params={"n": 5, "interleaved": "true"},
+    ).json()) == 5
+
+
 def test_quiz_finalize_goes_through_the_shared_metacog_finalisation(client, monkeypatch):
     """Le sas de sortie du quiz emprunte le MÊME chemin qu'une fin de lecture."""
     seen: dict = {}

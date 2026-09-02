@@ -19,7 +19,7 @@ def _reexec_inside_nwol_conda_env() -> None:
 
     `conda activate nwol` ne suffit pas toujours à ce que `python` pointe sur le
     bon interpréteur (alias shell, IDE). On force celui de l'env, qui porte les
-    dépendances natives (PyMuPDF, pywebview)."""
+    dépendances natives (pypdfium2, pywebview)."""
     if os.environ.get("NWOL_DISABLE_CONDA_REEXEC") == "1":
         return
     if os.environ.get("NWOL_CONDA_REEXECED") == "1":

@@ -6,7 +6,7 @@ import type { ReaderBlock } from "../../api/types";
  * Ancrage TEXTE sur pages reconstruites (édition cloud) : les citations de
  * Gemma et les surlignages mémorisés sont localisés par recherche « pliée »
  * (accents/casse/espaces normalisés) dans le texte des blocs — remplaçant de
- * `search_page` (PyMuPDF) qui n'a plus de sens sur un DOM reconstruit.
+ * `search_page` (PDFium) qui n'a plus de sens sur un DOM reconstruit.
  *
  * `renderMarkedText` : même contrat de sécurité que renderMathToHtml (tout est
  * échappé, seuls les segments $...$ deviennent du KaTeX), plus l'injection de

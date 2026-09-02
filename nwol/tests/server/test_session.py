@@ -1,20 +1,13 @@
 import pytest
 
 
-def _import_doc(client, tmp_path):
-    import fitz
-
-    p = tmp_path / "m.pdf"
-    d = fitz.open()
-    page = d.new_page()
-    page.insert_text((72, 72), "Contenu de test")
-    d.save(str(p))
-    d.close()
-    return client.post("/api/library/import", json={"path": str(p)}).json()["id"]
+def _import_doc(client, tmp_path, make_pdf):
+    p = make_pdf(tmp_path / "m.pdf", ["Contenu de test"])
+    return client.post("/api/library/import", json={"path": p}).json()["id"]
 
 
-def test_session_lifecycle_and_metrics(client, tmp_path):
-    doc_id = _import_doc(client, tmp_path)
+def test_session_lifecycle_and_metrics(client, tmp_path, make_pdf):
+    doc_id = _import_doc(client, tmp_path, make_pdf)
     sid = client.post("/api/session/start", json={"doc_id": doc_id}).json()["session_id"]
     assert isinstance(sid, int)
 
@@ -36,11 +29,11 @@ def test_session_lifecycle_and_metrics(client, tmp_path):
     assert len(m["reflection_questions"]) == 2
 
 
-def test_session_finalize_updates_profile(client, tmp_path):
+def test_session_finalize_updates_profile(client, tmp_path, make_pdf):
     from db.metacog import get_profile
     from db.session_reflections import get_session_reflections
 
-    doc_id = _import_doc(client, tmp_path)
+    doc_id = _import_doc(client, tmp_path, make_pdf)
     sid = client.post("/api/session/start", json={"doc_id": doc_id}).json()["session_id"]
     before = (get_profile(1) or {}).get("sessions_count", 0)
 
@@ -63,7 +56,7 @@ def test_finalize_nudges_profile_from_session_gauges(client):
     from db.sessions import start_session
     from services.session import finalize_session
 
-    doc_id = upsert_document("/tmp/nudge.pdf", "nudge.pdf", 5, "pymupdf", False)
+    doc_id = upsert_document("/tmp/nudge.pdf", "nudge.pdf", 5, "pdfium", False)
     sid = start_session(doc_id)
     before = float((get_profile(1) or {})["creativity"])  # 50.0 par défaut
     # L'amorce d'abord (ce que fait `LiveGauges.attach_session`), puis la mesure :
@@ -91,7 +84,7 @@ def test_finalize_without_any_measure_leaves_profile_intact(client):
     from db.sessions import start_session
     from services.session import finalize_session
 
-    doc_id = upsert_document("/tmp/silent.pdf", "silent.pdf", 5, "pymupdf", False)
+    doc_id = upsert_document("/tmp/silent.pdf", "silent.pdf", 5, "pdfium", False)
     sid = start_session(doc_id)
     before = dict(get_profile(1) or {})
 
@@ -119,7 +112,7 @@ def test_gauges_left_at_seed_do_not_drag_the_profile(client):
     from metacog.gauges import initialize_session_gauges
     from services.session import finalize_session
 
-    doc_id = upsert_document("/tmp/seed.pdf", "seed.pdf", 5, "pymupdf", False)
+    doc_id = upsert_document("/tmp/seed.pdf", "seed.pdf", 5, "pdfium", False)
     sid = start_session(doc_id)
     before = dict(ensure_profile(1))
     seed = initialize_session_gauges(before)
@@ -135,14 +128,14 @@ def test_gauges_left_at_seed_do_not_drag_the_profile(client):
         assert float(after[untouched]) == pytest.approx(float(before[untouched]))
 
 
-def test_session_analysis_carries_the_generated_question(client, tmp_path):
+def test_session_analysis_carries_the_generated_question(client, tmp_path, make_pdf):
     """Le sas reçoit SA troisième question avec l'analyse, jamais une chaîne vide.
 
     Elle était générée par le prompt de session puis jetée : le sas affichait
     trois questions en dur."""
     from services.session import REFLECTION_QUESTIONS
 
-    doc_id = _import_doc(client, tmp_path)
+    doc_id = _import_doc(client, tmp_path, make_pdf)
     sid = client.post("/api/session/start", json={"doc_id": doc_id}).json()["session_id"]
     client.post(f"/api/session/{sid}/end", json={"pages_read": 1, "duration_s": 30})
 
@@ -152,11 +145,11 @@ def test_session_analysis_carries_the_generated_question(client, tmp_path):
     assert question not in REFLECTION_QUESTIONS  # jamais un doublon des fixes
 
 
-def test_finalize_persists_the_generated_question_text(client, tmp_path):
+def test_finalize_persists_the_generated_question_text(client, tmp_path, make_pdf):
     """La 3e réflexion est persistée sous SON intitulé, pas « Réflexion 3 »."""
     from db.session_reflections import get_session_reflections
 
-    doc_id = _import_doc(client, tmp_path)
+    doc_id = _import_doc(client, tmp_path, make_pdf)
     sid = client.post("/api/session/start", json={"doc_id": doc_id}).json()["session_id"]
     client.post(f"/api/session/{sid}/end", json={"pages_read": 1, "duration_s": 30})
     generated = client.get(f"/api/session/{sid}/analysis").json()["question"]
@@ -170,7 +163,7 @@ def test_finalize_persists_the_generated_question_text(client, tmp_path):
     assert generated in stored
 
 
-def test_streak_is_a_pure_read_and_only_a_finished_session_advances_it(client, tmp_path):
+def test_streak_is_a_pure_read_and_only_a_finished_session_advances_it(client, tmp_path, make_pdf):
     """`GET /api/streak` n'écrit rien : ouvrir l'app n'est pas étudier.
 
     C'est le défaut que la v27 corrige — la série s'incrémentait dans ce GET, et
@@ -179,7 +172,7 @@ def test_streak_is_a_pure_read_and_only_a_finished_session_advances_it(client, t
     assert before["streak"] == 0
     assert client.get("/api/streak").json()["streak"] == 0  # toujours pas d'écriture
 
-    doc_id = _import_doc(client, tmp_path)
+    doc_id = _import_doc(client, tmp_path, make_pdf)
     sid = client.post("/api/session/start", json={"doc_id": doc_id}).json()["session_id"]
     client.post(f"/api/session/{sid}/end", json={"pages_read": 1, "duration_s": 30})
     client.post(f"/api/session/{sid}/finalize", json={"responses": ["r1"], "questions": ["Q1 ?"]})

@@ -26,7 +26,7 @@ def fresh_db(tmp_path, monkeypatch):
 def _document(filename: str, summary: str = "", keywords=None, subject=None) -> int:
     from db.documents import update_document_digest, upsert_document
 
-    doc_id = upsert_document(f"/tmp/{filename}", filename, 10, "pymupdf_scroll", False)
+    doc_id = upsert_document(f"/tmp/{filename}", filename, 10, "pdfium_scroll", False)
     update_document_digest(doc_id, subject, summary, keywords or [])
     return doc_id
 

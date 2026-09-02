@@ -290,7 +290,7 @@ pyinstaller desktop/metacapp.spec --noconfirm    # output in dist_app/
 
 | Layer | Technology | Role |
 |---|---|---|
-| PDF Rendering | **PyMuPDF** | Page rendering, page text, chapter detection |
+| PDF Rendering | **pypdfium2** (PDFium) | Page rendering, page text, chapter detection |
 | Semantic Intelligence | **Gemma 4 via Ollama** | Contextual answers, interventions, educational reasoning |
 | Cognitive Engine | **Custom metacognitive system** | Gauges, profile, reflection, session memory |
 | UI | **FastAPI + React (Vite) in pywebview** | Reader, floating assistant, stats, flashcards, languages |
@@ -403,5 +403,5 @@ Meta-Capp explores what educational software becomes when AI is used not to repl
 
 Released under the [MIT License](LICENSE) — © 2026 Cyprien Vial.
 
-Third-party components keep their own licenses (PyMuPDF is AGPL/commercial-dual-licensed; check its terms before redistributing a closed-source derivative).
+Third-party components keep their own licenses. The dependency list is deliberately free of copyleft: the PDF engine is **pypdfium2** (Apache-2.0 or BSD-3-Clause, wrapping Google/Foxit's PDFium, itself BSD-3-Clause) rather than PyMuPDF, which is AGPL-3.0 and would otherwise force this licence onto any closed-source derivative. See [architecture/07-pdf-et-code-reader.md](architecture/07-pdf-et-code-reader.md).
 

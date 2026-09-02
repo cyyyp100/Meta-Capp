@@ -13,8 +13,17 @@
 #     (OLLAMA_MODEL, default `gemma4:e4b`):  ollama pull gemma4:e4b
 #     The app degrades gracefully when Ollama is offline (no API key needed).
 
-# PDF rendering, page text and chapter detection
-PyMuPDF==1.24.14
+# PDF rendering, page text and chapter detection.
+# pypdfium2 wraps PDFium (the PDF engine of Chrome), licensed Apache-2.0 OR
+# BSD-3-Clause — deliberately NOT PyMuPDF, which is AGPL-3.0 and would force
+# the whole app open-source or a commercial Artifex licence.
+# See architecture/07-pdf-et-code-reader.md.
+# Pinned to 4.30.0, not the latest 5.x: that is the version the wider Python PDF
+# ecosystem pins, and upgrading breaks other tools sharing the `nwol` env.
+# PDFium is NOT thread-safe — every call is serialised through
+# pdf_viewer/engine.py:PDFIUM_LOCK. Do not bypass it.
+pypdfium2==4.30.0
+Pillow==12.3.0            # PNG encoding of the rendered pages (PdfBitmap -> file)
 
 # Local API server (the app's backend) — runs on 127.0.0.1, embedded in the app
 fastapi==0.136.1
@@ -30,5 +39,6 @@ pythonnet==3.0.5 ; sys_platform == "win32"
 # HTTP client — required by FastAPI's TestClient
 httpx==0.28.1
 
-# Testing
+# Testing (reportlab builds the PDF fixtures — test-only, never shipped)
 pytest==9.0.3
+reportlab==4.4.10

@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from config.settings import ASSETS_DIR
+from pdf_viewer.engine import PDFIUM_LOCK
 
 logger = logging.getLogger("pdf_viewer.renderer")
 
@@ -41,14 +42,23 @@ def render_page(pdf_path: str, page_number: int, zoom: float = 2.5) -> str:
     if out_path.exists():
         return str(out_path)
 
-    import fitz
+    import pypdfium2 as pdfium
 
-    with fitz.open(pdf_path) as doc:
-        if page_number < 1 or page_number > len(doc):
-            raise ValueError(f"Page {page_number} hors limites (1..{len(doc)})")
-        page = doc[page_number - 1]
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-        pix.save(str(out_path))
+    # PDFium n'est pas thread-safe et le lecteur demande plusieurs pages en
+    # parallèle : tout passe par le verrou moteur (voir pdf_viewer/engine.py).
+    with PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(pdf_path)
+        try:
+            if page_number < 1 or page_number > len(doc):
+                raise ValueError(f"Page {page_number} hors limites (1..{len(doc)})")
+            page = doc[page_number - 1]
+            try:
+                bitmap = page.render(scale=zoom)
+                bitmap.to_pil().convert("RGB").save(str(out_path))
+            finally:
+                page.close()
+        finally:
+            doc.close()
     logger.debug("Page rendue : %s", out_path)
     return str(out_path)
 

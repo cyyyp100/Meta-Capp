@@ -11,20 +11,14 @@ def test_session_start_cards_endpoint(client):
     assert len(cards) <= 5
 
 
-def _import_mini_pdf(client, tmp_path) -> int:
-    import fitz
-
-    pdf_path = tmp_path / "mini.pdf"
-    doc = fitz.open()
-    doc.new_page().insert_text((72, 72), "Bonjour Meta-Capp")
-    doc.save(str(pdf_path))
-    doc.close()
-    return client.post("/api/library/import", json={"path": str(pdf_path)}).json()["id"]
+def _import_mini_pdf(client, tmp_path, make_pdf) -> int:
+    pdf_path = make_pdf(tmp_path / "mini.pdf", ["Bonjour Meta-Capp"])
+    return client.post("/api/library/import", json={"path": pdf_path}).json()["id"]
 
 
-def test_session_analysis_endpoint(client, tmp_path):
+def test_session_analysis_endpoint(client, tmp_path, make_pdf):
     """L'endpoint d'analyse renvoie toujours {"analysis": str} (repli "" sans LLM)."""
-    doc_id = _import_mini_pdf(client, tmp_path)
+    doc_id = _import_mini_pdf(client, tmp_path, make_pdf)
     sid = client.post("/api/session/start", json={"doc_id": doc_id}).json()["session_id"]
     client.post(f"/api/session/{sid}/end", json={"pages_read": 1, "duration_s": 5})
 

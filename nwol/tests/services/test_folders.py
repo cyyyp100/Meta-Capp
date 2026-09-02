@@ -25,7 +25,7 @@ def _document(path: str, folder_id=None) -> int:
     from db.documents import upsert_document
     from db.folders import set_document_folder
 
-    doc_id = upsert_document(path, path.rsplit("/", 1)[-1], 10, "pymupdf_scroll", False)
+    doc_id = upsert_document(path, path.rsplit("/", 1)[-1], 10, "pdfium_scroll", False)
     if folder_id is not None:
         set_document_folder(doc_id, folder_id)
     return doc_id

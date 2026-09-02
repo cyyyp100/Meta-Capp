@@ -95,6 +95,9 @@ describe("GemmaPanel", () => {
     const trigger = await screen.findByRole("combobox", { name: /mode/i });
     expect(trigger).toBeInTheDocument();
     expect(trigger).toHaveTextContent(/normal/i);
+    // Le bouton fermé annonce le mode, pas son explication : celle-ci n'aide
+    // qu'au moment de choisir, et occupait un tiers de l'en-tête de Gemma.
+    expect(trigger).not.toHaveTextContent(/moments clés|key moments/i);
   });
 
   it("neutralise les raccourcis pendant une réponse en cours", async () => {

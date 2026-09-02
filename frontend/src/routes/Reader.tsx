@@ -11,6 +11,8 @@ import type { Highlight, HighlightAnchor, PageWord, SavedHighlight, SessionMetri
 import type { TextMark } from "../features/reader/anchorText";
 import { GemmaPanel, type QaMask } from "../features/reader/GemmaPanel";
 import { BlockPages } from "../features/reader/BlockPages";
+import { PageTextLayer } from "../features/reader/PageTextLayer";
+import { placedBoxes } from "../features/reader/textLayer";
 import { EntrySas } from "../features/session/EntrySas";
 import { ExitSas } from "../features/session/ExitSas";
 import { useTour } from "../features/tour/useTour";
@@ -169,7 +171,7 @@ export function Reader() {
 
   async function handleHighlights(items: Highlight[], page: number) {
     // Lecture reconstruite : les citations sont localisées par recherche pliée
-    // dans le texte des blocs (anchorText), pas par géométrie PyMuPDF.
+    // dans le texte des blocs (anchorText), pas par géométrie PDFium.
     if (isCode) {
       const marks: TextMark[] = [];
       for (const h of items) {
@@ -493,15 +495,17 @@ export function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, data?.page_count, isCode]);
 
+  // Rects d'une sélection : on relit les boîtes PLACÉES du calque (bandes de
+  // ligne), pas les boîtes brutes de PDFium — le surlignage enregistré doit
+  // couvrir exactement ce que l'utilisateur a vu se colorer en sélectionnant.
   function computeSelectionRects(pageEl: HTMLElement, page: number, sel: Selection): number[][] {
-    const words = wordsByPage[page] || [];
+    const boxes = placedBoxes(wordsByPage[page] || []);
     const spans = pageEl.querySelectorAll<HTMLElement>("[data-wi]");
     const rects: number[][] = [];
     spans.forEach((span) => {
       if (!sel.containsNode(span, true)) return;
-      const wi = Number(span.dataset.wi);
-      const w = words[wi];
-      if (w) rects.push([w[0], w[1], w[2], w[3]]);
+      const box = boxes.get(Number(span.dataset.wi));
+      if (box) rects.push([...box]);
     });
     return mergeLineRects(rects);
   }
@@ -772,39 +776,7 @@ export function Reader() {
                     </svg>
                   ) : null}
                   {/* Calque de texte transparent : sélection native par-dessus l'image. */}
-                  {words ? (
-                    <div
-                      data-textlayer
-                      style={{
-                        position: "absolute",
-                        inset: 0,
-                        cursor: "text",
-                        userSelect: "text",
-                        WebkitUserSelect: "text",
-                      }}
-                    >
-                      {words.map((wd, wi) => (
-                        <span
-                          key={wi}
-                          data-wi={wi}
-                          style={{
-                            position: "absolute",
-                            left: wd[0] * scale,
-                            top: wd[1] * scale,
-                            height: (wd[3] - wd[1]) * scale,
-                            fontSize: (wd[3] - wd[1]) * scale * 0.86,
-                            lineHeight: 1,
-                            color: "transparent",
-                            whiteSpace: "pre",
-                            userSelect: "text",
-                            WebkitUserSelect: "text",
-                          }}
-                        >
-                          {wd[4]}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
+                  {words ? <PageTextLayer words={words} scale={scale} /> : null}
                   {/* Surlignages mémorisés (cliquables pour suppression). */}
                   {pageSaved.length ? (
                     <svg

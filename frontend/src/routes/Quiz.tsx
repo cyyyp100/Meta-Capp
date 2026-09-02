@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
 import type { QuizAnswerRecord, QuizEvaluation, QuizQuestion, QuizVerdict } from "../api/types";
-import { ArrowRight, Check, Eye, Lightbulb, Search, X } from "lucide-react";
+import { ArrowRight, Check, Eye, Lightbulb, Search, Shuffle, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +22,7 @@ import { QuestionTypeBadge } from "../features/questions/QuestionTypeBadge";
 import { VerdictBadge } from "../features/questions/VerdictBadge";
 import { answerWidget } from "../features/questions/registry";
 import { renderMathToHtml } from "../features/reader/renderMath";
+import { WhyButton } from "../features/science/WhyButton";
 import { formatDuration } from "../features/session/duration";
 import { useT } from "../i18n";
 
@@ -77,6 +78,9 @@ export function Quiz() {
   const [topic, setTopic] = useState("");
   const [askedTopic, setAskedTopic] = useState("");
   const [length, setLength] = useState<number | null>(null);
+  // Pratique entrelacée : exclusive des deux autres réglages, qu'elle vide en
+  // s'activant. Seule la longueur de session reste réglable.
+  const [interleaved, setInterleaved] = useState(false);
   const [runId, setRunId] = useState(0);
   const [started, setStarted] = useState(false);
 
@@ -98,8 +102,9 @@ export function Quiz() {
   // La génération LLM (un seul appel batch) n'est déclenchée qu'après un clic
   // explicite sur « Lancer le quiz » : on laisse le temps de régler la session.
   const { data, isFetching, isError } = useQuery({
-    queryKey: ["quiz", "questions", subject, askedTopic, askedLength, runId],
-    queryFn: () => api.quizQuestions(askedLength, subject || undefined, askedTopic || undefined),
+    queryKey: ["quiz", "questions", subject, askedTopic, askedLength, interleaved, runId],
+    queryFn: () =>
+      api.quizQuestions(askedLength, subject || undefined, askedTopic || undefined, interleaved),
     enabled: started,
   });
 
@@ -203,6 +208,24 @@ export function Quiz() {
     setStarted(false);
   }
 
+  /**
+   * Bascule de la pratique entrelacée. En s'activant, elle VIDE la matière et le
+   * sujet plutôt que de seulement les griser : rien de périmé ne part au serveur,
+   * et `finalize()` enregistre la session sans matière ni sujet — ce qu'elle est.
+   */
+  function toggleInterleaved() {
+    setInterleaved((on) => {
+      if (!on) {
+        setSubject("");
+        setTopic("");
+        setAskedTopic("");
+      }
+      return !on;
+    });
+    resetState();
+    setStarted(false);
+  }
+
   function startQuiz() {
     resetState();
     setAskedTopic(topic.trim());
@@ -223,14 +246,31 @@ export function Quiz() {
 
       {!started && !done && (
         <div className="mt-6 rounded-lg border border-border bg-surface p-5 shadow-e1">
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <Button
+              variant={interleaved ? "default" : "secondary"}
+              aria-pressed={interleaved}
+              onClick={toggleInterleaved}
+            >
+              <Shuffle className="size-4" aria-hidden />
+              {t("quiz.interleaved_label")}
+            </Button>
+            <WhyButton whyKey="interleaving" />
+          </div>
+
           <label className="text-[13px] font-semibold" htmlFor="quiz-topic">
             {t("quiz.topic_label")}
           </label>
-          <TopicInput value={topic} onChange={setTopic} onSubmit={startQuiz} />
+          <TopicInput
+            value={topic}
+            onChange={setTopic}
+            onSubmit={startQuiz}
+            disabled={interleaved}
+          />
 
           <div className="mt-4 flex flex-wrap items-end gap-4">
             <Field label={t("quiz.subject_label")}>
-              <Select value={subject} onValueChange={changeSubject}>
+              <Select value={subject} onValueChange={changeSubject} disabled={interleaved}>
                 <SelectTrigger className="w-[240px]" aria-label={t("quiz.subject_label")}>
                   <SelectValue />
                 </SelectTrigger>
@@ -262,7 +302,9 @@ export function Quiz() {
             )}
           </div>
 
-          <p style={{ color: "var(--muted)", margin: "16px 0 12px" }}>{t("quiz.pickThemeHint")}</p>
+          <p style={{ color: "var(--muted)", margin: "16px 0 12px" }}>
+            {t(interleaved ? "quiz.interleaved_hint" : "quiz.pickThemeHint")}
+          </p>
           <Button size="lg" onClick={startQuiz}>
             {t("quiz.start")}
           </Button>
@@ -276,7 +318,11 @@ export function Quiz() {
         // un sujet sans résultat laissait l'écran dans une impasse.
         <div style={{ marginTop: 32 }}>
           <p style={{ color: "var(--muted)", fontStyle: "italic" }}>
-            {askedTopic ? t("quiz.noneForTopic", { topic: askedTopic }) : t("quiz.none")}
+            {interleaved
+              ? t("quiz.interleaved_none")
+              : askedTopic
+                ? t("quiz.noneForTopic", { topic: askedTopic })
+                : t("quiz.none")}
           </p>
           <Button variant="secondary" onClick={restart}>
             {t("quiz.restart")}
@@ -392,10 +438,12 @@ function TopicInput({
   value,
   onChange,
   onSubmit,
+  disabled = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  disabled?: boolean;
 }) {
   const t = useT();
   return (
@@ -405,13 +453,15 @@ function TopicInput({
       className="mt-1.5 flex items-center gap-1.5 rounded-sm border border-border bg-background px-2.5 py-2
                  transition-[border-color,box-shadow] duration-fast ease-brand
                  focus-within:border-brand focus-within:ring-[3px] focus-within:ring-ring/50
-                 hover:border-border-strong"
+                 hover:border-border-strong
+                 has-disabled:pointer-events-none has-disabled:opacity-50"
     >
       <Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
       <input
         id="quiz-topic"
         type="text"
         value={value}
+        disabled={disabled}
         placeholder={t("quiz.topic_placeholder")}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {

@@ -40,23 +40,14 @@ def test_retrieve_returns_empty_without_meaningful_terms():
     assert pdf_rag.retrieve(doc_id=123, question="le la les de et", current_page=1) == []
 
 
-def test_retrieve_end_to_end(tmp_path, monkeypatch):
-    import fitz
-
-    pdf = tmp_path / "doc.pdf"
-    doc = fitz.open()
-    pages = [
+def test_retrieve_end_to_end(tmp_path, monkeypatch, make_pdf):
+    pdf = make_pdf(tmp_path / "doc.pdf", [
         "La photosynthese convertit la lumiere en energie chimique.",  # page 1
         "Les mitochondries produisent l'ATP par la respiration.",      # page 2
         "Introduction generale au chapitre.",                          # page 3 (page courante)
-    ]
-    for text in pages:
-        page = doc.new_page()
-        page.insert_text((72, 72), text, fontsize=12)
-    doc.save(str(pdf))
-    doc.close()
+    ])
 
-    monkeypatch.setattr(pdf_rag, "get_document", lambda doc_id: {"path": str(pdf)})
+    monkeypatch.setattr(pdf_rag, "get_document", lambda doc_id: {"path": pdf})
     pdf_rag.clear_index(777)
 
     results = pdf_rag.retrieve(777, "Comment fonctionne la photosynthese ?", current_page=3)

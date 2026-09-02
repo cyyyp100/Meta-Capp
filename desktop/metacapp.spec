@@ -3,9 +3,15 @@
 # Build :  conda activate nwol && cd frontend && npm run build && cd ..
 #          pyinstaller desktop/metacapp.spec --noconfirm
 #
-# Recette de départ : les dépendances binaires délicates (PyMuPDF/fitz,
-# pywebview, uvicorn) sont collectées via collect_all ; itérer si un import
-# manque au premier lancement du binaire.
+# Recette de départ : les dépendances binaires délicates (pypdfium2, pywebview,
+# uvicorn) sont collectées via collect_all ; itérer si un import manque au
+# premier lancement du binaire.
+#
+# ⚠ `pypdfium2_raw` est OBLIGATOIRE dans la liste. C'est un module livré DANS la
+# wheel `pypdfium2`, mais c'est lui qui porte la bibliothèque native
+# `libpdfium.{dylib,so,dll}` — et `collect_all("pypdfium2")` ne va pas la
+# chercher (0 binaire collecté). Le nommer séparément est le seul moyen ; sans
+# lui le binaire s'ouvre puis échoue à l'ouverture du premier PDF.
 import os
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -17,7 +23,7 @@ datas = []
 binaries = []
 hiddenimports = []
 
-for pkg in ("uvicorn", "fastapi", "starlette", "fitz", "webview"):
+for pkg in ("uvicorn", "fastapi", "starlette", "pypdfium2", "pypdfium2_raw", "PIL", "webview"):
     try:
         d, b, h = collect_all(pkg)
         datas += d

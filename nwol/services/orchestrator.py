@@ -34,7 +34,7 @@ __all__ = ["import_pdf", "import_code", "llm_status", "generate_document_digest"
 def import_pdf(path: str) -> dict:
     """Importe un PDF : upsert document + index de chapitres. Renvoie le détail.
 
-    Le PDF est rendu tel quel (moteur "pymupdf_scroll") : aucune reconstruction,
+    Le PDF est rendu tel quel (moteur "pdfium_scroll") : aucune reconstruction,
     aucun appel réseau.
     """
     with PdfDocument(path) as pdf:
@@ -43,7 +43,7 @@ def import_pdf(path: str) -> dict:
         doc_path = pdf.path
         filename = pdf.filename
 
-    doc_id = upsert_document(doc_path, filename, page_count, "pymupdf_scroll", has_toc)
+    doc_id = upsert_document(doc_path, filename, page_count, "pdfium_scroll", has_toc)
     save_chapters(doc_id, build_chapter_index(doc_path))
     generate_document_digest(doc_id, filename)
 

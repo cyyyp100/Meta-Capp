@@ -69,7 +69,7 @@ def _page_image_paths(doc_id: int, page: int) -> list[str]:
     le texte seul si Ollama refuse l'image : aucun risque pour la réponse.
 
     Un document servi en blocs (fichier de code) n'a rien à montrer au modèle
-    que le texte ne dise déjà : on n'y joint pas d'image. Un rendu PyMuPDF de
+    que le texte ne dise déjà : on n'y joint pas d'image. Un rendu PDFium de
     code coûte du temps et des tokens de vision pour zéro information."""
     if _served_as_text_blocks(doc_id, page):
         return []
