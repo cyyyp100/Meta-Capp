@@ -37,6 +37,11 @@ hiddenimports += collect_submodules("uvicorn")
 # Données applicatives embarquées (chemins absolus).
 datas += [
     (os.path.join(ROOT, "frontend", "dist"), "frontend/dist"),
+    # nwol/resources/ EST versionné (le PDF de démonstration de la visite
+    # guidée) : contrairement à nwol/assets/ juste en dessous, il est présent
+    # dans tout checkout, donc embarqué sans condition. Le service le lit sous
+    # sys._MEIPASS (services/onboarding.py:RESOURCES_DIR).
+    (os.path.join(ROOT, "nwol", "resources"), "resources"),
 ]
 # nwol/assets/ n'est PAS versionné (caches runtime, gitignoré) : absent des
 # checkouts CI. L'app gelée lit ses assets depuis le dossier données OS

@@ -17,6 +17,7 @@ export function SearchBox({
     // l'anneau sur le conteneur. Sans cela, tabuler dans la recherche
     // n'affichait strictement rien.
     <div
+      data-tour="search"
       className="flex w-65 items-center gap-1.5 rounded-sm border border-border bg-surface px-2.5 py-2
                  transition-[border-color,box-shadow] duration-fast ease-brand
                  focus-within:border-brand focus-within:ring-[3px] focus-within:ring-ring/50

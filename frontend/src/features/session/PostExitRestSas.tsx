@@ -8,13 +8,26 @@ const REST_SECONDS = 60;
 const UNLOCK_AFTER_SECONDS = 15;
 
 // Sas de repos post-session : une courte phase sans stimulation nouvelle.
-export function PostExitRestSas({ onDone }: { onDone: () => void }) {
+//
+// Les deux durées sont paramétrables pour la visite guidée, et pour elle seule :
+// une minute de repos est le bon geste après une vraie lecture, mais imposer une
+// minute d'immobilité au milieu d'un tutoriel ferait fermer la fenêtre. La visite
+// montre le sas et son intention, pas sa durée.
+export function PostExitRestSas({
+  onDone,
+  totalSeconds = REST_SECONDS,
+  unlockAfterSeconds = UNLOCK_AFTER_SECONDS,
+}: {
+  onDone: () => void;
+  totalSeconds?: number;
+  unlockAfterSeconds?: number;
+}) {
   const t = useT();
-  const [left, setLeft] = useState(REST_SECONDS);
-  const elapsed = REST_SECONDS - left;
-  const canSkip = elapsed >= UNLOCK_AFTER_SECONDS;
-  const lockedLeft = Math.max(0, UNLOCK_AFTER_SECONDS - elapsed);
-  const progress = elapsed / REST_SECONDS;
+  const [left, setLeft] = useState(totalSeconds);
+  const elapsed = totalSeconds - left;
+  const canSkip = elapsed >= unlockAfterSeconds;
+  const lockedLeft = Math.max(0, unlockAfterSeconds - elapsed);
+  const progress = elapsed / totalSeconds;
 
   useEffect(() => {
     if (left <= 0) {
@@ -57,6 +70,7 @@ export function PostExitRestSas({ onDone }: { onDone: () => void }) {
         </div>
 
         <div
+          data-tour="rest"
           style={{
             margin: "22px auto",
             width: 104,

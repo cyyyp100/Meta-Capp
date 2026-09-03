@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, LineChart } from "lucide-react";
-import { useEffect } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
@@ -8,7 +7,6 @@ import { Card } from "../components/Card";
 import { EvolutionPanel } from "../features/stats/EvolutionPanel";
 import { RadarPanel } from "../features/stats/RadarPanel";
 import { scoreColor, scoreInk, subjectLabel } from "../features/stats/labels";
-import { useTour } from "../features/tour/useTour";
 import { useT } from "../i18n";
 
 export function Stats() {
@@ -18,14 +16,6 @@ export function Stats() {
     queryFn: api.statsOverview,
   });
   const { data: langStats } = useQuery({ queryKey: ["lang", "stats"], queryFn: api.langStats });
-
-  // Dernière étape de la visite, et la plus importante : le radar. C'est là
-  // qu'on montre que le produit observe — donc le seul endroit où demander
-  // quoi que ce soit a du sens.
-  const requestTour = useTour((s) => s.request);
-  useEffect(() => {
-    if (data) requestTour("profil");
-  }, [data, requestTour]);
 
   const del = (d: number) => (d > 2 ? `+${Math.round(d)}` : d < -2 ? `${Math.round(d)}` : t("trend.stable"));
 

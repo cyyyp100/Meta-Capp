@@ -49,19 +49,22 @@ PREFERENCES: dict[str, Pref] = {
     # Vérification des mises à jour : DÉSACTIVÉE PAR DÉFAUT. C'est le seul appel
     # sortant de l'édition locale ; il ne part jamais sans un oui explicite.
     "updates_check": Pref("updates_check", "false", kind="bool"),
-    # Visite guidée du premier lancement. DEUX réglages et non un :
-    #   * `tour_done` — terminée ou refusée définitivement, on n'y revient plus ;
-    #   * `tour_step` — l'étape la plus avancée déjà montrée, pour qu'une visite
-    #     interrompue reprenne où elle en était au lieu de rejouer sa première
-    #     bulle à chaque lancement.
-    # Le second est en base et non dans le `localStorage` pour la même raison que
-    # le reste : le stockage du webview ne survit pas à une restauration de
-    # sauvegarde, et la visite recommencerait alors chez quelqu'un qui l'a faite.
+    # Visite guidée du premier lancement : terminée ou refusée, on n'y revient
+    # plus sans demande explicite (« Aide ▸ Tutoriel »).
+    #
+    # UN seul réglage, et plus deux. Il exista un `tour_step` qui mémorisait
+    # l'étape la plus avancée, du temps où la visite était une poignée de bulles
+    # opportunistes qu'on pouvait reprendre en cours de route. La visite est
+    # maintenant un parcours scripté qui emprunte un document de démonstration
+    # (`services/onboarding.py`) : ce document est rendu au premier redémarrage,
+    # donc une visite interrompue ne peut pas reprendre en son milieu — elle
+    # repart de sa première bulle. Un réglage qui prétend le contraire ment.
+    #
+    # En base et non dans le `localStorage` du webview, pour la raison donnée en
+    # tête de fichier : le stockage du navigateur embarqué ne survit pas à une
+    # restauration de sauvegarde, et la visite recommencerait chez quelqu'un qui
+    # l'a déjà faite.
     "tour_done": Pref("tour_done", "false", kind="bool"),
-    "tour_step": Pref(
-        "tour_step", "none",
-        choices=("none", "import", "gemma", "intervention", "exit", "profil"),
-    ),
 }
 
 

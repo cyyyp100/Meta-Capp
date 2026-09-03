@@ -14,7 +14,19 @@ import { TEXT_LAYER_FONT, fitScaleX, measureText, placeWords } from "./textLayer
  * largeur naturelle du mot dans la police du navigateur n'a aucune raison de
  * coïncider avec celle du PDF et la sélection dérive le long de la ligne.
  */
-export function PageTextLayer({ words, scale }: { words: PageWord[]; scale: number }) {
+export function PageTextLayer({
+  words,
+  scale,
+  tourAnchor = false,
+}: {
+  words: PageWord[];
+  scale: number;
+  /** Ancre de la visite guidée : c'est ce calque, et lui seul, qui rend la page
+   *  sélectionnable — donc surlignable. L'étape qui explique le geste montre
+   *  bien l'objet qui le permet, plutôt qu'une barre d'outils qui n'existe
+   *  qu'une fois la sélection faite. Posée sur une seule page (cf. Reader). */
+  tourAnchor?: boolean;
+}) {
   // Le facteur de compression ne dépend pas du zoom (rapport de deux largeurs) :
   // on ne mesure qu'à l'arrivée des mots, pas à chaque changement d'échelle.
   const spans = useMemo(
@@ -31,6 +43,7 @@ export function PageTextLayer({ words, scale }: { words: PageWord[]; scale: numb
   return (
     <div
       data-textlayer
+      {...(tourAnchor ? { "data-tour": "sel-hint" } : {})}
       style={{
         position: "absolute",
         inset: 0,

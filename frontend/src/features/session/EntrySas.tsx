@@ -22,32 +22,68 @@ import { WarmUp } from "./WarmUp";
 const TOTAL_SECONDS = 60;
 /** En dessous de ce reliquat, on peut passer à la suite. */
 const SKIP_AT = 30;
+/** Visite guidée : on montre le rituel, on ne l'impose pas. */
+const DEMO_SECONDS = 8;
 
 const RING_RADIUS = 46;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
-export function EntrySas({ docId, title, onStart }: { docId: number; title: string; onStart: () => void }) {
+export function EntrySas({
+  docId,
+  title,
+  onStart,
+  demo = false,
+}: {
+  docId: number;
+  title: string;
+  onStart: () => void;
+  /**
+   * Séance de démonstration de la visite guidée. Trois différences, toutes
+   * pour la même raison — le sas est un rituel de RALENTISSEMENT, et on ne
+   * ralentit pas quelqu'un qui découvre le produit :
+   *   * le compte à rebours passe de 60 s à quelques secondes ;
+   *   * l'accroche de curiosité est écrite d'avance (pas d'appel LLM, donc pas
+   *     d'attente ni de dépendance à Ollama au premier lancement) ;
+   *   * pas de warm-up : réviser des cartes n'a aucun sens sur un document
+   *     qu'on n'a jamais lu, et l'utilisateur n'en a encore aucune.
+   */
+  demo?: boolean;
+}) {
   const t = useT();
   const reduce = useReducedMotion();
   const [phase, setPhase] = useState<"intro" | "review">("intro");
+  const totalSeconds = demo ? DEMO_SECONDS : TOTAL_SECONDS;
   // SAS de 1 minute, passable seulement après 30 s écoulées.
-  const [left, setLeft] = useState(TOTAL_SECONDS);
-  const canSkip = left <= SKIP_AT;
+  const [left, setLeft] = useState(totalSeconds);
+  const canSkip = demo || left <= SKIP_AT;
 
-  const { data: hook } = useQuery({ queryKey: ["hook", docId], queryFn: () => api.docHook(docId, 1), staleTime: Infinity });
+  const { data: hook } = useQuery({
+    queryKey: ["hook", docId],
+    queryFn: () => api.docHook(docId, 1),
+    staleTime: Infinity,
+    enabled: !demo,
+  });
   // Warm-up : 5 cartes sélectionnées par pertinence (dues + récence × matière).
-  const { data: cards } = useQuery({ queryKey: ["session-start", docId], queryFn: () => api.sessionStartCards(docId), staleTime: Infinity });
+  const { data: cards } = useQuery({
+    queryKey: ["session-start", docId],
+    queryFn: () => api.sessionStartCards(docId),
+    staleTime: Infinity,
+    enabled: !demo,
+  });
+  const hookText = demo ? t("demo.entry_hook") : hook?.hook;
 
   // Compte à rebours (phase intro) : à 0, on passe au warm-up (pas direct à la lecture).
   useEffect(() => {
     if (phase !== "intro") return;
     if (left <= 0) {
-      setPhase("review");
+      // En démonstration il n'y a pas de warm-up : on entre dans la lecture.
+      if (demo) onStart();
+      else setPhase("review");
       return;
     }
     const id = setTimeout(() => setLeft((l) => l - 1), 1000);
     return () => clearTimeout(id);
-  }, [left, phase]);
+  }, [left, phase, demo, onStart]);
 
   // Warm-up sans carte disponible : on démarre la lecture directement.
   useEffect(() => {
@@ -66,7 +102,7 @@ export function EntrySas({ docId, title, onStart }: { docId: number; title: stri
     return <SasOverlay contained />;
   }
 
-  const elapsed = TOTAL_SECONDS - left;
+  const elapsed = totalSeconds - left;
 
   return (
     <SasOverlay contained>
@@ -79,13 +115,13 @@ export function EntrySas({ docId, title, onStart }: { docId: number; title: stri
         <div className="mb-3 text-[13px] font-bold tracking-[1px] text-brand-ink uppercase">
           {t("entry.label")}
         </div>
-        <h2 className="m-0 mb-2.5 font-serif text-2xl font-bold text-foreground">{title}</h2>
+        <h2 data-tour="entry" className="m-0 mb-2.5 font-serif text-2xl font-bold text-foreground">{title}</h2>
         <p className="leading-relaxed text-text-soft">{t("entry.text")}</p>
         <div className="mt-3">
           <WhyButton whyKey="entry" />
         </div>
 
-        {hook?.hook && (
+        {hookText && (
           <motion.div
             className="mx-auto my-4 flex max-w-[460px] items-start gap-2.5 rounded-md bg-brand-soft px-4 py-3 text-left text-sm leading-relaxed text-accent-foreground"
             initial={reduce ? false : { opacity: 0, y: 6 }}
@@ -93,7 +129,7 @@ export function EntrySas({ docId, title, onStart }: { docId: number; title: stri
             transition={{ duration: 0.4, delay: 0.15, ease: [0.33, 1, 0.68, 1] }}
           >
             <Lightbulb className="mt-0.5 size-4 shrink-0" aria-hidden />
-            <span>{hook.hook}</span>
+            <span>{hookText}</span>
           </motion.div>
         )}
 
@@ -124,7 +160,7 @@ export function EntrySas({ docId, title, onStart }: { docId: number; title: stri
               strokeWidth="3"
               strokeLinecap="round"
               strokeDasharray={RING_CIRCUMFERENCE}
-              strokeDashoffset={RING_CIRCUMFERENCE * (1 - elapsed / TOTAL_SECONDS)}
+              strokeDashoffset={RING_CIRCUMFERENCE * (1 - elapsed / totalSeconds)}
               // Une seconde pile : l'anneau glisse au lieu de sauter par crans.
               style={{ transition: "stroke-dashoffset 1s linear" }}
             />
@@ -139,7 +175,7 @@ export function EntrySas({ docId, title, onStart }: { docId: number; title: stri
         </div>
 
         <div className="flex flex-wrap justify-center gap-2.5">
-          <Button size="lg" onClick={() => setPhase("review")} disabled={!canSkip}>
+          <Button size="lg" onClick={() => (demo ? onStart() : setPhase("review"))} disabled={!canSkip}>
             {canSkip ? t("entry.continue") : t("entry.skip_in", { n: left - SKIP_AT })}
           </Button>
         </div>

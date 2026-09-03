@@ -39,7 +39,7 @@ export function FolderRail({
   }
 
   return (
-    <aside style={rail}>
+    <aside data-tour="folders" style={rail}>
       <PseudoRow
         label={t("library.all")}
         Icon={Files}

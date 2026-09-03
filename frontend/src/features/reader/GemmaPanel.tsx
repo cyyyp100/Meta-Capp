@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   CornerDownLeft,
   Lightbulb,
@@ -29,7 +29,7 @@ import { AnswerInput } from "../questions/AnswerInput";
 import { QuestionStem } from "../questions/QuestionStem";
 import { QuestionTypeBadge } from "../questions/QuestionTypeBadge";
 import { VerdictBadge } from "../questions/VerdictBadge";
-import { useTour } from "../tour/useTour";
+import { DEMO_BEATS, DEMO_QUESTION, DEMO_QUOTES, type DemoBeat } from "./demoScript";
 import { renderMathToHtml } from "./renderMath";
 
 interface Message {
@@ -96,6 +96,8 @@ export function GemmaPanel({
   onRemoveContextChip,
   onGatedChange,
   onMask,
+  demo = false,
+  onDemoReady,
 }: {
   docId: number;
   currentPage: number;
@@ -106,6 +108,14 @@ export function GemmaPanel({
   onGatedChange?: (active: boolean, page?: number) => void;
   /** Passage à cacher dans la page (rappel libre), null pour le redécouvrir. */
   onMask?: (mask: QaMask | null, page: number) => void;
+  /**
+   * Séance de démonstration de la visite guidée : AUCUN WebSocket n'est ouvert
+   * et le contenu affiché est écrit d'avance (`demoScript.ts`). C'est ce qui
+   * garantit que la visite n'écrit rien et ne dépend pas d'Ollama.
+   */
+  demo?: boolean;
+  /** Rend à la visite de quoi jouer les répliques, tant que le panneau vit. */
+  onDemoReady?: (controls: { openPanel: () => void; play: (beat: DemoBeat) => void } | null) => void;
 }) {
   const t = useT();
   // Gemma démarre fermé : l'utilisateur (ou une intervention) l'ouvre au besoin.
@@ -161,6 +171,13 @@ export function GemmaPanel({
   }, []);
 
   useEffect(() => {
+    // Séance de démonstration : PAS de connexion. C'est la garantie centrale de
+    // la visite — sans WebSocket, il n'y a ni jauges, ni questions enregistrées,
+    // ni dérive d'attention, donc rien qui puisse atteindre le profil.
+    if (demo) {
+      setConnected(true);
+      return;
+    }
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/api/reader/${docId}/stream${wsTokenSuffix()}`);
     ws.onopen = () => setConnected(true);
@@ -185,10 +202,6 @@ export function GemmaPanel({
         if (text) {
           setOpen(true);
           setMessages((m) => [...m, { role: "assistant", text }]);
-          // Étape 3 de la visite : elle ne peut se jouer QUE sur une vraie
-          // intervention autonome. C'est le moment où le produit se montre —
-          // personne n'a rien demandé, et elle a remarqué quelque chose.
-          useTour.getState().request("intervention");
         }
         if (Array.isArray(evt.highlights) && evt.highlights.length) {
           onHighlightsRef.current?.(evt.highlights, pageRef.current);
@@ -248,12 +261,66 @@ export function GemmaPanel({
       window.removeEventListener("focus", reportPresence);
       ws.close();
     };
-  }, [docId]);
+  }, [docId, demo]);
 
   useEffect(() => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "viewport", page: currentPage, session_id: sessionId ?? null }));
   }, [currentPage, sessionId]);
+
+  // ── La séance de démonstration ──────────────────────────────────────────
+  //
+  // Les répliques ne se déroulent pas toutes seules : la visite les déclenche,
+  // une par étape, pour que la bulle qui les explique soit déjà à l'écran quand
+  // elles arrivent. Rien ici ne part sur le réseau.
+  const playDemo = useCallback(
+    (beat: DemoBeat) => {
+      if (beat === "question") {
+        setQaFeedback(null);
+        setQaDraft("");
+        setQa({
+          question: t(DEMO_QUESTION.questionKey),
+          choices: DEMO_QUESTION.choiceKeys.map((key) => t(key)),
+          type: DEMO_QUESTION.type,
+          mask: null,
+        });
+        setOpen(true);
+        return;
+      }
+      const { userKey, assistantKey } = DEMO_BEATS[beat];
+      setOpen(true);
+      if (userKey) setMessages((m) => [...m, { role: "user", text: t(userKey) }]);
+      if (!assistantKey) return;
+      // Un temps de réflexion simulé : sans lui, la réponse apparaît d'un bloc
+      // en même temps que la question, et on ne comprend pas qui dit quoi.
+      setBusy(true);
+      window.setTimeout(() => {
+        setBusy(false);
+        setMessages((m) => [...m, { role: "assistant", text: t(assistantKey) }]);
+        // Les surlignages, eux, sont VRAIS : ils passent par la recherche PDFium
+        // du lecteur. S'ils ne trouvent pas leur phrase dans le PDF, il ne se
+        // passe rien de visible et la visite continue.
+        onHighlightsRef.current?.(
+          [
+            { quote: DEMO_QUOTES.key, purpose: "key" },
+            { quote: DEMO_QUOTES.explain, purpose: "explain" },
+          ],
+          pageRef.current,
+        );
+      }, 700);
+    },
+    [t],
+  );
+
+  // La visite ne peut piloter le panneau que tant qu'il est monté.
+  useEffect(() => {
+    if (!demo) return;
+    onDemoReady?.({ openPanel: () => setOpen(true), play: playDemo });
+    return () => onDemoReady?.(null);
+    // `onDemoReady` est stable (useCallback côté Reader) ; le relire à chaque
+    // rendu rebrancherait les contrôles en boucle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demo, playDemo]);
 
   useEffect(() => {
     bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight, behavior: "smooth" });
@@ -289,6 +356,11 @@ export function GemmaPanel({
   }
 
   function sendRaw(payload: object): boolean {
+    // Séance de démonstration : rien ne part. Les commandes restent cliquables
+    // — c'est la moitié de ce que la visite montre — mais elles n'atteignent
+    // aucun serveur, et surtout pas « Gemma est indisponible », qui serait faux
+    // et alarmant au premier lancement.
+    if (demo) return false;
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       setMessages((m) => [...m, { role: "assistant", text: t("gemma.unavailable") }]);
@@ -305,14 +377,18 @@ export function GemmaPanel({
     setDraft("");
     setBusy(true);
     const snippets = (contextChipsRef.current ?? []).map((c) => c.text);
-    sendRaw({ type: "ask", question: text, page: pageRef.current, selected_snippets: snippets });
+    // Message non parti : on rend la main. Sans ça, l'indicateur « Gemma
+    // réfléchit… » tournait indéfiniment sur une connexion fermée.
+    if (!sendRaw({ type: "ask", question: text, page: pageRef.current, selected_snippets: snippets })) {
+      setBusy(false);
+    }
   }
 
   function action(type: "rephrase" | "recap" | "hook", label: string) {
     if (busy) return;
     setMessages((m) => [...m, { role: "user", text: label }]);
     setBusy(true);
-    sendRaw({ type, page: pageRef.current });
+    if (!sendRaw({ type, page: pageRef.current })) setBusy(false);
   }
 
   function changeMode(m: (typeof MODES)[number]) {
@@ -322,16 +398,33 @@ export function GemmaPanel({
 
   function startQa() {
     if (busy) return;
+    // Séance de démonstration : « Quiz-moi » rejoue la question écrite d'avance
+    // plutôt que d'en demander une. C'est ce que la visite annonce — on montre
+    // le geste, on ne fait pas tourner l'évaluateur.
+    if (demo) {
+      playDemo("question");
+      return;
+    }
     setQa(null);
     setQaFeedback(null);
     setBusy(true);
-    sendRaw({ type: "start_qa", page: pageRef.current, session_id: sessionId ?? null });
+    if (!sendRaw({ type: "start_qa", page: pageRef.current, session_id: sessionId ?? null })) {
+      setBusy(false);
+    }
   }
 
   function submitQa(answer: string) {
     if (busy || !answer.trim() || !qa) return;
+    if (demo) {
+      // Verdict écrit d'avance : aucune réponse n'est évaluée, donc rien n'est
+      // enregistré ni compté dans la rétention du profil.
+      setQaFeedback({ verdict: DEMO_QUESTION.verdict, feedback: t(DEMO_QUESTION.feedbackKey) });
+      return;
+    }
     setBusy(true);
-    sendRaw({ type: "qa_answer", question: qa.question, answer, page: pageRef.current, session_id: sessionId ?? null });
+    if (!sendRaw({ type: "qa_answer", question: qa.question, answer, page: pageRef.current, session_id: sessionId ?? null })) {
+      setBusy(false);
+    }
   }
 
   async function makeFlashcard(index: number) {
@@ -413,6 +506,7 @@ export function GemmaPanel({
             <Select value={mode} onValueChange={(v) => changeMode(v as (typeof MODES)[number])}>
               <SelectTrigger
                 size="sm"
+                data-tour="gemma-mode"
                 aria-label={t("gemma.mode_label")}
                 className="h-7 w-auto gap-1 border-border bg-surface text-[11px]"
               >
@@ -477,10 +571,11 @@ export function GemmaPanel({
           </div>
         </div>
 
-        {/* `data-tour="intervention"` : l'étape 3 de la visite s'ancre ici, sur
-            le fil de conversation que l'intervention vient d'ouvrir. Sans cette
-            ancre, l'étape restait active sans jamais rien afficher. */}
-        <div ref={bodyRef} data-tour="intervention" style={bodyStyle}>
+        {/* Le fil de conversation : trois étapes de la visite s'y ancrent (la
+            découverte du panneau, la réponse à une question, l'intervention
+            autonome). Une seule ancre pour les trois — c'est bien le même
+            endroit qu'on désigne à chaque fois. */}
+        <div ref={bodyRef} data-tour="gemma-body" style={bodyStyle}>
           {messages.map((m, i) =>
             m.role === "system" ? (
               <div key={i} style={{ alignSelf: "center", fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>
@@ -510,6 +605,7 @@ export function GemmaPanel({
             ),
           )}
           {qa && (
+            <div data-tour="gemma-qa">
             <QaCard
               qa={qa}
               feedback={qaFeedback}
@@ -525,6 +621,7 @@ export function GemmaPanel({
                 applyMask(null);
               }}
             />
+            </div>
           )}
           {busy && (
             <div
@@ -548,7 +645,7 @@ export function GemmaPanel({
           )}
         </div>
 
-        <div style={{ display: "flex", gap: 6, padding: "6px 10px", flexWrap: "wrap", borderTop: "1px solid var(--border)" }}>
+        <div data-tour="gemma-chips" style={{ display: "flex", gap: 6, padding: "6px 10px", flexWrap: "wrap", borderTop: "1px solid var(--border)" }}>
           <Button variant="chip" size="sm" disabled={busy} onClick={() => action("rephrase", t("gemma.rephrase_cmd"))}>
             {t("gemma.rephrase")}
           </Button>

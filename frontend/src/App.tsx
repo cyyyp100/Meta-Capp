@@ -3,6 +3,7 @@ import { Route, Routes } from "react-router-dom";
 
 import { AppLayout } from "./components/AppLayout";
 import { RouteFallback } from "./components/RouteFallback";
+import { TourHost } from "./features/tour/TourHost";
 import { Home } from "./routes/Home";
 
 // Code-splitting par route : recharts (Stats) et react-rnd (Reader) ne sont
@@ -30,6 +31,11 @@ const Settings = lazy(() => import("./routes/Settings").then((m) => ({ default: 
 export function App() {
   return (
     <Suspense fallback={<RouteFallback />}>
+      {/* La visite guidée est montée ICI, au-dessus des routes, et non dans
+          `AppLayout` : la moitié de ce qu'elle montre (le lecteur, les sas) est
+          plein écran, donc hors du layout. Tant qu'elle y vivait, ses étapes de
+          lecture devenaient actives sans que rien ne les peigne. */}
+      <TourHost />
       <Routes>
         <Route element={<AppLayout />}>
           <Route path="/" element={<Home />} />

@@ -57,7 +57,7 @@ export function Progress() {
           <ArrowLeft className="size-4" aria-hidden />
           {t("progress.back")}
         </Link>
-        <h1 className="m-0 font-serif text-h1 font-bold">{t("progress.title")}</h1>
+        <h1 data-tour="progress" className="m-0 font-serif text-h1 font-bold">{t("progress.title")}</h1>
         <p className="mt-1 mb-0 text-muted-foreground">{t("progress.subtitle")}</p>
       </header>
 

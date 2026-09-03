@@ -306,6 +306,21 @@ export const api = {
   // AUCUNE requête sortante côté serveur (cf. nwol/services/updates.py).
   checkUpdates: () => getJSON<UpdateStatus>("/api/updates/check"),
 
+  // ── Visite guidée : le document emprunté ─────────────────────────────────
+  // Aucun paramètre, ni ici ni côté serveur : ces deux routes n'agissent que
+  // sur le document que le service a lui-même créé, jamais sur un document de
+  // l'utilisateur (cf. nwol/services/onboarding.py).
+  //
+  // `document: null` n'est pas une erreur — c'est « ressource absente », et la
+  // visite saute alors son chapitre lecture.
+  borrowDemoDocument: () =>
+    postJSON<{ document: DocumentSummary | null }>("/api/onboarding/demo", {}),
+  returnDemoDocument: () =>
+    fetch("/api/onboarding/demo", { method: "DELETE" }).then((r) => {
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json() as Promise<{ ok: boolean }>;
+    }),
+
   // ── Ma progression (historique longitudinal) ─────────────────────────────
   progressSessions: (limit = 40) =>
     getJSON<ProgressTimeline>(`/api/progress/sessions?limit=${limit}`),
@@ -321,8 +336,7 @@ export type PreferenceKey =
   | "density"
   | "text_size"
   | "updates_check"
-  | "tour_done"
-  | "tour_step";
+  | "tour_done";
 export type Preferences = Record<PreferenceKey, string>;
 
 export interface PreferencesPayload {

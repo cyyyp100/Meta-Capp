@@ -22,20 +22,21 @@ import { usePreferences, useThemeFromServer } from "../features/shell/usePrefere
 import { UserMenu } from "../features/shell/UserMenu";
 import { useDisplayPreferences } from "@/theme/useDisplayPreferences";
 
-import { TourHost } from "../features/tour/TourHost";
-import { useTourHydration } from "../features/tour/useTourHydration";
-
-const NAV = [
-  { to: "/", labelKey: "nav.home", Icon: Home, end: true },
+// `tour` : l'ancre de la visite guidée. Les entrées de navigation n'ont ni id,
+// ni classe propre, ni `data-*` — sans cet attribut il n'existe aucun moyen de
+// désigner UNE entrée du rail, et une bulle qui vise `aside nav a` désignerait
+// toujours la première.
+export const NAV = [
+  { to: "/", labelKey: "nav.home", Icon: Home, end: true, tour: "nav-home" },
   // Pas d'entrée « Progression » ici : elle vit sous /stats/progress, et on y
   // entre par le bas du profil. Deux destinations pour un même sujet — l'état
   // courant et son histoire — auraient forcé à choisir laquelle ouvrir sans
   // qu'aucune des deux ne se suffise.
-  { to: "/stats", labelKey: "nav.profile", Icon: BarChart3, end: false },
-  { to: "/flashcards", labelKey: "nav.flashcards", Icon: Layers, end: false },
-  { to: "/quiz", labelKey: "nav.quiz", Icon: HelpCircle, end: false },
-  { to: "/lang", labelKey: "nav.lang", Icon: Globe, end: false },
-  { to: "/brainstorming", labelKey: "nav.brainstorming", Icon: MessageSquare, end: false },
+  { to: "/stats", labelKey: "nav.profile", Icon: BarChart3, end: false, tour: "nav-profile" },
+  { to: "/flashcards", labelKey: "nav.flashcards", Icon: Layers, end: false, tour: "nav-flashcards" },
+  { to: "/quiz", labelKey: "nav.quiz", Icon: HelpCircle, end: false, tour: "nav-quiz" },
+  { to: "/lang", labelKey: "nav.lang", Icon: Globe, end: false, tour: "nav-lang" },
+  { to: "/brainstorming", labelKey: "nav.brainstorming", Icon: MessageSquare, end: false, tour: "nav-brainstorming" },
 ];
 
 export function AppLayout() {
@@ -52,8 +53,6 @@ export function AppLayout() {
   // Densité et taille du texte : deux attributs sur <html>, toute la
   // conséquence visuelle dans tokens.css.
   useDisplayPreferences(preferences);
-  // La visite ne peut rien afficher tant qu'on ignore si elle a déjà eu lieu.
-  useTourHydration(preferences);
 
   // ⌘O : le même chemin que « Fichier ▸ Ouvrir un document… » du menu natif.
   const openDocument = useCallback(async () => {
@@ -77,11 +76,8 @@ export function AppLayout() {
 
   return (
     <div className="flex h-full">
-      {/* Monté une seule fois, hors des routes : les bulles traversent la
-          navigation (import sur l'accueil, Gemma dans le lecteur). */}
-      <TourHost />
       <aside className="flex w-58 shrink-0 flex-col border-r border-border bg-surface px-3.5 py-5.5">
-        <div className="px-2.5 pb-4.5 font-serif text-h2 font-bold tracking-tight">
+        <div data-tour="brand" className="px-2.5 pb-4.5 font-serif text-h2 font-bold tracking-tight">
           Meta-Capp
         </div>
 
@@ -91,6 +87,7 @@ export function AppLayout() {
               key={item.to}
               to={item.to}
               end={item.end}
+              data-tour={item.tour}
               className={({ isActive }) =>
                 cn(
                   "group relative flex items-center gap-2.5 rounded-sm px-3 py-2.5",

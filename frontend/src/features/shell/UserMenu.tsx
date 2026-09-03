@@ -41,6 +41,11 @@ export function UserMenu({ name, streak }: { name: string; streak?: StudyStreak 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
+        // Ancre de la visite guidée pour l'étape « réglages ». C'est le
+        // DÉCLENCHEUR qu'on désigne, et non l'entrée « Réglages » du menu :
+        // celle-ci n'existe dans le DOM que menu ouvert, et une bulle ne peut
+        // pas s'ancrer sur un élément qui n'est pas là.
+        data-tour="nav-settings"
         aria-label={t("user.menu")}
         className="flex w-full items-center gap-2.5 rounded-sm px-2 py-2 text-left outline-none
                    transition-colors duration-fast ease-brand

@@ -554,6 +554,19 @@ STRINGS: dict[str, dict[str, str]] = {
         "folders.document_missing": "Document introuvable.",
         "folders.cycle": "Un dossier ne peut pas être déplacé dans l'un de ses sous-dossiers.",
         "folders.too_deep": "Arborescence trop profonde (maximum {n} niveaux).",
+        # ── Visite guidée : le document emprunté ──────────────────────────
+        # La fiche du document de démonstration est écrite ici plutôt que
+        # générée par le LLM : la carte doit être complète immédiatement et
+        # hors ligne, et son texte fait partie de ce qu'on montre.
+        "onboarding.doc_title": "Comprendre son ordinateur (démonstration)",
+        "onboarding.doc_subject": "Informatique",
+        "onboarding.doc_summary": (
+            "Extrait de démonstration fourni avec Meta-Capp : le chapitre matériel "
+            "d'un rapport d'informatique — processeur, mémoire vive, stockage. Il "
+            "sert à montrer la lecture, Gemma et les sas — il disparaît de la "
+            "bibliothèque à la fin de la visite."
+        ),
+        "onboarding.doc_keywords": "processeur, mémoire vive, stockage, démonstration",
     },
     "en": {
         # ── Home ──────────────────────────────────────────────────────────
@@ -1101,6 +1114,16 @@ STRINGS: dict[str, dict[str, str]] = {
         "folders.document_missing": "Document not found.",
         "folders.cycle": "A folder cannot be moved into one of its own subfolders.",
         "folders.too_deep": "Folder tree too deep (maximum {n} levels).",
+        # ── Guided tour: the borrowed document ────────────────────────────
+        "onboarding.doc_title": "Understanding your computer (demo)",
+        "onboarding.doc_subject": "Computer science",
+        "onboarding.doc_summary": (
+            "Demo excerpt shipped with Meta-Capp: the hardware chapter of a "
+            "computer science report — processor, memory, storage. It exists to "
+            "show the reader, Gemma and the airlocks — it leaves the library when "
+            "the tour ends."
+        ),
+        "onboarding.doc_keywords": "processor, memory, storage, demo",
     },
 }
 

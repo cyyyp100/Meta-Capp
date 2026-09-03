@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Flame, Plus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -22,7 +22,6 @@ import { SearchBox } from "../features/library/SearchBox";
 import { useDebounced } from "../features/library/useDebounced";
 import { useLibraryUi } from "../features/library/useLibraryUi";
 import { useT } from "../i18n";
-import { useTour } from "../features/tour/useTour";
 
 /** Nombre de documents de l'entrée « Récents » (le catalogue est déjà trié). */
 const RECENT_COUNT = 12;
@@ -165,13 +164,6 @@ export function Home() {
     },
   };
 
-  // Étape 1 de la visite : le bouton d'import, sur l'écran qu'on a vraiment
-  // sous les yeux au premier lancement — une bibliothèque vide.
-  const requestTour = useTour((s) => s.request);
-  useEffect(() => {
-    if (documents) requestTour("import");
-  }, [documents, requestTour]);
-
   const emptyMessage =
     selection.kind === "folder" && !searching ? t("library.folder_empty_docs") : t("home.empty");
 
@@ -259,7 +251,7 @@ export function Home() {
               void mutate(() => api.createFolder(name, null), "library.folder_error")
             }
           />
-          <main style={main}>
+          <main data-tour="grid" style={main}>
             <DocumentGrid
               documents={visible}
               folderNameOf={(doc: DocumentSummary) =>

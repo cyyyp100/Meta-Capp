@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 
 import type { DocumentSummary } from "../../api/types";
 import { useT } from "../../i18n";
+import { useTour } from "../tour/useTour";
 import { DocumentCard } from "./DocumentCard";
 import type { FlatFolder } from "./folderTree";
 
@@ -37,6 +38,9 @@ export function DocumentGrid({
 }) {
   const t = useT();
   const reduce = useReducedMotion();
+  // Le document emprunté par la visite guidée, s'il y en a un : sa carte porte
+  // l'ancre de l'étape qui la commente.
+  const demoDocId = useTour((s) => s.demoDocId);
 
   if (documents.length === 0) {
     // Recherche infructueuse : constat sobre, on ne met pas en scène un échec.
@@ -89,6 +93,11 @@ export function DocumentGrid({
         {documents.map((doc, i) => (
           <motion.div
             key={doc.id}
+            // Ancre de la visite guidée, sur la SEULE carte du document qu'elle
+            // a emprunté. `querySelector` prend le premier élément trouvé : la
+            // poser sur toutes les cartes ferait pointer la bulle sur celle du
+            // haut, qui n'est pas celle dont on parle.
+            {...(doc.id === demoDocId ? { "data-tour": "doc-card" } : {})}
             // `layout` applique un transform, qui crée un contexte d'empilement :
             // le `z-index: 3` que .doc-card prend au survol resterait prisonnier
             // de cette enveloppe et la carte agrandie passerait SOUS sa voisine.

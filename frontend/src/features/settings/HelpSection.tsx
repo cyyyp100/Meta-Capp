@@ -6,8 +6,9 @@
 // automatique de journaux serait exactement ce que l'édition locale promet de
 // ne pas faire.
 import { useQuery } from "@tanstack/react-query";
-import { Download, ExternalLink } from "lucide-react";
+import { Download, ExternalLink, PlayCircle } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { api } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ const PROJECT_PAGE = "https://github.com/cyyyp100/meta-capp";
 
 export function HelpSection({ focusAbout = false }: { focusAbout?: boolean }) {
   const t = useT();
+  const navigate = useNavigate();
   const about = useRef<HTMLElement>(null);
   // La version vient du serveur (`server/config.APP_VERSION`) et n'est pas
   // recopiée ici : deux versions affichées finissent toujours par diverger.
@@ -33,6 +35,23 @@ export function HelpSection({ focusAbout = false }: { focusAbout?: boolean }) {
 
   return (
     <>
+      {/* La visite ne se relançait que depuis « Aide ▸ Tutoriel » de la barre de
+          menu NATIVE : introuvable pour qui ne l'ouvre jamais, et inexistante en
+          développement (`npm run dev` n'a pas de coque pywebview). Elle passe
+          par le même pont que le menu, pour n'avoir qu'un seul chemin. */}
+      <SettingsCard title={t("settings.help.tour")} description={t("settings.help.tour_hint")}>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            navigate("/");
+            window.dispatchEvent(new CustomEvent("metacapp:tour"));
+          }}
+        >
+          <PlayCircle className="size-4" aria-hidden />
+          {t("settings.help.tour_action")}
+        </Button>
+      </SettingsCard>
+
       <SettingsCard title={t("settings.help.report")} description={t("settings.help.report_hint")}>
         <Button asChild variant="secondary">
           <a href="/api/data/export-logs" download>

@@ -20,7 +20,25 @@ import { SasCard, SasOverlay } from "./SasOverlay";
 // l'analyse — c'est le même appel qui porte les deux. Attendre le LLM pour poser
 // les trois faisait patienter devant un écran vide ; les figer toutes les trois
 // jetait une question personnalisée déjà payée.
-export function ExitSas({ metrics, onClose }: { metrics: SessionMetrics; onClose: () => void }) {
+export function ExitSas({
+  metrics,
+  onClose,
+  demo = false,
+}: {
+  metrics: SessionMetrics;
+  onClose: () => void;
+  /**
+   * Séance de démonstration de la visite guidée.
+   *
+   * C'EST ICI que se joue la promesse « la visite ne compte pas dans ton
+   * profil ». Le sas de sortie est le seul endroit de toute l'application qui
+   * pousse une session dans le modèle d'apprentissage (`finalizeSession` ->
+   * `nudge_metacog_profile` -> `metacog/profile.py`). En démonstration, cet
+   * appel n'a simplement pas lieu — pas plus que les invalidations de cache qui
+   * feraient croire à l'accueil et à la frise que quelque chose a bougé.
+   */
+  demo?: boolean;
+}) {
   const queryClient = useQueryClient();
   const t = useT();
   const reduce = useReducedMotion();
@@ -32,12 +50,18 @@ export function ExitSas({ metrics, onClose }: { metrics: SessionMetrics; onClose
 
   // Analyse LLM de la session (stats + jauges session + jauges profil) ET la
   // question de réflexion personnalisée. Best-effort.
-  const { data: analysis, isLoading: analysisLoading } = useQuery({
+  const { data: analysis, isLoading: rawAnalysisLoading } = useQuery({
     queryKey: ["session-analysis", metrics.session_id],
     queryFn: () => api.sessionAnalysis(metrics.session_id),
     staleTime: Infinity,
+    // Aucune session n'existe côté serveur : la demander renverrait une erreur,
+    // et la faire générer par Ollama ferait attendre devant un squelette.
+    enabled: !demo,
   });
-  const generatedQuestion = analysis?.question ?? "";
+  const analysisLoading = demo ? false : rawAnalysisLoading;
+  const demoAnalysis = demo ? { analysis: t("demo.exit_analysis"), question: t("demo.reflect_3") } : null;
+  const shownAnalysis = demoAnalysis ?? analysis;
+  const generatedQuestion = shownAnalysis?.question ?? "";
 
   function setResponse(index: number, value: string) {
     setResponses((r) => r.map((v, j) => (j === index ? value : v)));
@@ -46,6 +70,10 @@ export function ExitSas({ metrics, onClose }: { metrics: SessionMetrics; onClose
   // Les intitulés partent avec les réponses : la 3e n'existe nulle part côté
   // serveur, elle a été générée pour cette session.
   function submitFinalize() {
+    // La séance de démonstration ne se finalise pas : elle n'existe pas côté
+    // serveur (`session_id` vaut -1), et c'est très bien ainsi. Ni écriture de
+    // profil, ni série d'étude, ni ligne dans la frise de progression.
+    if (demo) return Promise.resolve(null);
     return api
       .finalizeSession(metrics.session_id, responses, [...fixedQuestions, generatedQuestion])
       .then((result) => {
@@ -104,7 +132,7 @@ export function ExitSas({ metrics, onClose }: { metrics: SessionMetrics; onClose
           ))}
         </div>
 
-        {(analysisLoading || analysis?.analysis) && (
+        {(analysisLoading || shownAnalysis?.analysis) && (
           <div className="mb-4 rounded-md bg-brand-soft px-4 py-3.5 text-accent-foreground">
             <div className="mb-1.5 text-[11px] font-bold tracking-wide">
               {t("exit.analysis_title")}
@@ -120,7 +148,7 @@ export function ExitSas({ metrics, onClose }: { metrics: SessionMetrics; onClose
                   <Skeleton className="h-3.5 w-[60%]" />
                 </div>
               ) : (
-                analysis?.analysis
+                shownAnalysis?.analysis
               )}
             </div>
           </div>

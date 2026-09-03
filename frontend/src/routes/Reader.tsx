@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Highlighter, Plus } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { useConfirm } from "@/components/ui/confirm";
@@ -10,6 +10,7 @@ import { api, pageImageUrl } from "../api/client";
 import type { Highlight, HighlightAnchor, PageWord, SavedHighlight, SessionMetrics } from "../api/types";
 import type { TextMark } from "../features/reader/anchorText";
 import { GemmaPanel, type QaMask } from "../features/reader/GemmaPanel";
+import { DEMO_METRICS, DEMO_REFLECTION_KEYS, type DemoBeat } from "../features/reader/demoScript";
 import { BlockPages } from "../features/reader/BlockPages";
 import { PageTextLayer } from "../features/reader/PageTextLayer";
 import { placedBoxes } from "../features/reader/textLayer";
@@ -275,20 +276,62 @@ export function Reader() {
   // ni image de page. Un PDF reste rendu tel quel, en images.
   const isCode = data?.extraction_engine === "code";
 
-  // Étape 2 de la visite guidée : la bulle Gemma, une fois qu'on est vraiment
-  // dans le lecteur et que le SAS d'entrée est franchi — sinon la bulle
-  // s'ancrerait derrière le voile du SAS. Elle se joue sur le PREMIER document
-  // importé par l'utilisateur, pas sur un PDF d'exemple embarqué : on découvre
-  // l'assistante sur son propre contenu, ce qui est autrement plus convaincant.
-  const requestTour = useTour((s) => s.request);
-  useEffect(() => {
-    if (entered && data) requestTour("gemma");
-  }, [entered, data, requestTour]);
+  // ── Séance de démonstration de la visite guidée ─────────────────────────
+  //
+  // Ce document est celui que la visite a emprunté au serveur le temps de son
+  // chapitre lecture. Tout ce qui écrirait quelque chose est débranché : pas de
+  // session ouverte, pas de WebSocket, pas d'appel LLM, pas de finalisation.
+  // C'est la garantie « la visite ne compte pas dans ton profil », tenue par ce
+  // qu'on n'appelle pas plutôt que par un drapeau à respecter partout.
+  // Figé À L'OUVERTURE, et non recalculé à chaque rendu. La visite rend le
+  // document de démonstration en quittant le chapitre lecture, donc `demoDocId`
+  // repasse à `null` alors que ce composant est encore monté une frame. Une
+  // valeur réactive basculerait à `false` à cet instant précis et relancerait
+  // les deux effets qu'elle gardait : ouverture d'une vraie session et d'un
+  // WebSocket — sur un document qui vient d'être supprimé.
+  const [demo] = useState(() => useTour.getState().demoDocId === id);
+  const setTourControls = useTour((s) => s.setControls);
+  const gemmaControls = useRef<{ openPanel: () => void; play: (beat: DemoBeat) => void } | null>(null);
+  // Les métriques du sas de sortie sont inventées : elles décrivent une lecture
+  // plausible, pas une mesure. Les intitulés de réflexion sont traduits ici,
+  // `demoScript.ts` ne portant que leurs clés.
+  //
+  // Passées par une `ref` et non par une dépendance d'effet : `useT()` renvoie
+  // une NOUVELLE fonction à chaque rendu, donc un `useMemo` sur `[t]` produirait
+  // un objet différent à chaque fois et rebrancherait les contrôles de la visite
+  // en boucle — avec, entre le nettoyage et la repose, une fenêtre où ils sont
+  // nuls. Même idiome que les `onHighlightsRef` du panneau Gemma.
+  const demoMetricsRef = useRef(DEMO_METRICS);
+  demoMetricsRef.current = {
+    ...DEMO_METRICS,
+    reflection_questions: DEMO_REFLECTION_KEYS.slice(0, 2).map((k) => t(k)),
+  };
 
-  // Étape 4 : le sas de sortie, à l'instant où il s'affiche.
+  const handleDemoReady = useCallback(
+    (controls: { openPanel: () => void; play: (beat: DemoBeat) => void } | null) => {
+      gemmaControls.current = controls;
+    },
+    [],
+  );
+
+  // La visite pilote le lecteur d'ici : ouvrir Gemma, jouer une réplique, faire
+  // apparaître le sas de sortie. Elle ne peut le faire que tant qu'il est monté.
   useEffect(() => {
-    if (exitMetrics) requestTour("exit");
-  }, [exitMetrics, requestTour]);
+    if (!demo) return;
+    setTourControls({
+      // Le sas d'entrée recouvre la page : sans ce passage explicite, l'étape
+      // suivante s'ancrerait sur une page cachée derrière son voile.
+      enterReading: () => setEntered(true),
+      openPanel: () => gemmaControls.current?.openPanel(),
+      play: (beat) => gemmaControls.current?.play(beat),
+      endSession: () => setExitMetrics(demoMetricsRef.current),
+      closeExitSas: () => {
+        setExitMetrics(null);
+        setShowPostExitRest(true);
+      },
+    });
+    return () => setTourControls(null);
+  }, [demo, setTourControls]);
 
   // Marque-page : on fige la page de reprise au tout premier chargement (valeur de la
   // session précédente, écrite en fin de session côté backend). On ignore la page 1
@@ -462,8 +505,13 @@ export function Reader() {
   }, [data?.page_count, isCode]);
 
   // Démarre une session de lecture à l'ouverture du document.
+  //
+  // Sauf en démonstration : c'est LA ligne qui, sinon, créerait une
+  // `reading_sessions` pour la visite guidée. `sessionId` reste alors nul, ce
+  // que tout le reste du lecteur sait déjà traiter (il l'est aussi le temps de
+  // l'aller-retour réseau).
   useEffect(() => {
-    if (!Number.isFinite(id)) return;
+    if (!Number.isFinite(id) || demo) return;
     startTimeRef.current = Date.now();
     maxPageRef.current = 1;
     let cancelled = false;
@@ -471,7 +519,7 @@ export function Reader() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, demo]);
 
   // Suit la page la plus avancée atteinte (pour les métriques de session).
   useEffect(() => {
@@ -604,6 +652,13 @@ export function Reader() {
   }
 
   async function handleEnd() {
+    // Démonstration : le bilan est écrit d'avance, il n'y a pas de session à
+    // clore. C'est aussi le chemin qu'emprunte la visite pour faire apparaître
+    // le sas de sortie au moment où elle l'explique.
+    if (demo) {
+      setExitMetrics(demoMetricsRef.current);
+      return;
+    }
     if (sessionId == null) {
       navigate("/");
       return;
@@ -685,6 +740,12 @@ export function Reader() {
                 <div
                   key={n}
                   data-page={n}
+                  // Ancre de la visite guidée, sur la PREMIÈRE page seulement :
+                  // `querySelector` prend le premier élément trouvé, donc la
+                  // poser sur toutes reviendrait au même — mais dire « la page
+                  // 1 » ici évite qu'on croie l'attribut générique et qu'on
+                  // s'appuie dessus ailleurs.
+                  {...(n === 1 ? { "data-tour": "page" } : {})}
                   style={{
                     position: "relative",
                     width,
@@ -776,7 +837,7 @@ export function Reader() {
                     </svg>
                   ) : null}
                   {/* Calque de texte transparent : sélection native par-dessus l'image. */}
-                  {words ? <PageTextLayer words={words} scale={scale} /> : null}
+                  {words ? <PageTextLayer words={words} scale={scale} tourAnchor={n === 1} /> : null}
                   {/* Surlignages mémorisés (cliquables pour suppression). */}
                   {pageSaved.length ? (
                     <svg
@@ -813,6 +874,7 @@ export function Reader() {
 
       {/* Barre supérieure flottante */}
       <div
+        data-tour="toolbar"
         style={{
           position: "absolute",
           top: 0,
@@ -951,13 +1013,27 @@ export function Reader() {
         onRemoveContextChip={removeContextChip}
         onGatedChange={handleGatedChange}
         onMask={handleMask}
+        demo={demo}
+        onDemoReady={handleDemoReady}
       />
 
-      {data && !entered && <EntrySas docId={id} title={data.title} onStart={() => setEntered(true)} />}
+      {data && !entered && (
+        <EntrySas docId={id} title={data.title} onStart={() => setEntered(true)} demo={demo} />
+      )}
 
-      {exitMetrics && <ExitSas metrics={exitMetrics} onClose={handleExitSasClose} />}
+      {exitMetrics && <ExitSas metrics={exitMetrics} onClose={handleExitSasClose} demo={demo} />}
 
-      {showPostExitRest && <PostExitRestSas onDone={() => navigate("/")} />}
+      {/* En démonstration, le repos est raccourci et la visite reprend la main
+          à sa fin — on ne renvoie pas vers l'accueil au milieu d'un tutoriel. */}
+      {showPostExitRest && (
+        <PostExitRestSas
+          onDone={() => {
+            if (!demo) navigate("/");
+          }}
+          totalSeconds={demo ? 10 : undefined}
+          unlockAfterSeconds={demo ? 0 : undefined}
+        />
+      )}
     </div>
   );
 }

@@ -21,6 +21,7 @@ from server.routers import (
     highlights,
     lang,
     library,
+    onboarding,
     preferences,
     progress,
     quiz,
@@ -41,6 +42,12 @@ async def _lifespan(_app: FastAPI):
     initialize_schema()
     # Restaure la langue choisie : elle pilote l'i18n backend ET les prompts LLM.
     preferences.apply_stored_lang()
+    # Une visite guidée ne survit pas à un redémarrage : un document de
+    # démonstration encore prêté est le résidu d'une fenêtre fermée en plein
+    # milieu, et il n'a rien à faire dans la bibliothèque de quelqu'un.
+    from services.onboarding import reconcile_demo_document
+
+    reconcile_demo_document()
     logger.info("Serveur Meta-Capp prêt (v%s).", APP_VERSION)
     yield
 
@@ -101,6 +108,7 @@ def create_app() -> FastAPI:
     app.include_router(brainstorming.router, prefix="/api")
     app.include_router(data.router, prefix="/api")
     app.include_router(updates.router, prefix="/api")
+    app.include_router(onboarding.router, prefix="/api")
 
     # En production, sert le frontend compilé depuis la même origine.
     if FRONTEND_DIST.is_dir():

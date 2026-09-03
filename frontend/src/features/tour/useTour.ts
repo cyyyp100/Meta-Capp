@@ -1,123 +1,161 @@
-// useTour.ts — La visite guidée du premier lancement.
+// useTour.ts — Le moteur de la visite guidée du premier lancement.
 //
 // Aucun onboarding n'existait : le premier écran était une bibliothèque vide.
 // Le problème que ça pose n'est pas d'ergonomie, il est commercial — personne
 // ne paie pour quelque chose qu'il n'a pas vu faire.
 //
 // Forme retenue : des bulles ANCRÉES sur les vrais boutons, dans l'écran réel,
-// pendant que l'utilisateur peut agir. Pas de vidéo, pas de carrousel plein
-// écran — on montre l'application, pas une brochure.
+// le bouton en clair et tout le reste assombri. Pas de vidéo, pas de carrousel
+// plein écran — on montre l'application, pas une brochure.
 //
-// La séquence n'est PAS jouée d'affilée : chaque étape attend son contexte.
-// La bulle « Gemma » ne peut se montrer que dans le lecteur, celle du sas de
-// sortie qu'à la fin d'une session. Un composant signale « mon contexte vient
-// d'apparaître » via `request()`, et le store décide si c'est le tour de
-// celle-là. C'est ce qui permet de déclencher les étapes 2 à 4 sur le PREMIER
-// document importé par l'utilisateur, plutôt que d'embarquer un PDF d'exemple :
-// on découvre Gemma sur son propre contenu, ce qui est bien plus convaincant.
+// La visite fut d'abord OPPORTUNISTE : cinq bulles qui attendaient que leur
+// contexte apparaisse de lui-même, sur le premier document de l'utilisateur.
+// L'idée était jolie et le résultat vide : qui n'importait rien ne voyait ni
+// Gemma, ni les sas, ni le profil. Elle est maintenant SCRIPTÉE — elle emprunte
+// un document de démonstration, navigue elle-même d'écran en écran et joue une
+// fausse séance de lecture. L'utilisateur n'a qu'à lire et cliquer « Suivant ».
+//
+// « Fausse séance » au sens fort, et c'est la garantie qui compte : le chapitre
+// lecture n'appelle NI `/api/session/*`, NI le WebSocket du lecteur, NI Ollama
+// (cf. `features/reader/demoScript.ts`). Rien n'atteint donc le profil
+// métacognitif — par construction, et non par un drapeau qu'il faudrait penser
+// à respecter dans chacune des écritures.
 import { create } from "zustand";
 
 import { api } from "@/api/client";
 
-export type TourStep = "import" | "gemma" | "intervention" | "exit" | "profil";
+import { DEMO_ROUTE, TOUR_STEPS, type TourStepDef } from "./steps";
 
-/** L'ordre du RÉCIT, pas celui de la navigation. Il ne force pas un passage
- *  obligé : il ne sert qu'à ne jamais revenir en arrière. Quelqu'un qui va droit
- *  au profil sans rien importer verra la bulle du radar — et pas ensuite celle
- *  de l'import, qui n'aurait plus rien à raconter. */
-export const TOUR_ORDER: TourStep[] = ["import", "gemma", "intervention", "exit", "profil"];
-
-interface TourState {
-  /** `true` = terminée ou refusée. On n'y revient plus sans demande explicite. */
-  done: boolean;
-  /** Étape la plus avancée déjà montrée (`null` = aucune). */
-  furthest: TourStep | null;
-  /** Étape actuellement affichée. */
-  active: TourStep | null;
-  /** Le store n'a pas encore lu l'état serveur : on n'affiche rien avant. */
-  hydrated: boolean;
-
-  hydrate: (done: boolean, furthest: TourStep | null) => void;
-  request: (step: TourStep) => void;
-  dismiss: () => void;
-  release: () => void;
-  skip: () => void;
-  restart: () => void;
+/** Ce que la visite sait piloter dans le lecteur, branché par `Reader`. */
+export interface DemoControls {
+  /** Franchit le sas d'entrée : il recouvre la page qu'on veut ensuite montrer. */
+  enterReading: () => void;
+  openPanel: () => void;
+  play: (beat: "answer" | "intervention" | "question") => void;
+  endSession: () => void;
+  closeExitSas: () => void;
 }
 
-function indexOf(step: TourStep | null): number {
-  return step === null ? -1 : TOUR_ORDER.indexOf(step);
+export interface TourContext {
+  demo: DemoControls | null;
+}
+
+interface TourState {
+  /** La visite est en cours : une bulle est (ou va être) à l'écran. */
+  running: boolean;
+  /** Index dans `TOUR_STEPS`. */
+  index: number;
+  /** Le document emprunté, `null` si la ressource manque. */
+  demoDocId: number | null;
+  /** Tant qu'on ignore si la visite a déjà eu lieu, on n'affiche rien. */
+  hydrated: boolean;
+  /** `true` = terminée ou refusée ; on n'y revient plus sans demande explicite. */
+  done: boolean;
+  /** Branché par le lecteur pendant qu'il est monté. */
+  controls: DemoControls | null;
+
+  hydrate: (done: boolean) => void;
+  setControls: (controls: DemoControls | null) => void;
+  start: () => Promise<void>;
+  next: () => void;
+  skip: () => void;
+}
+
+/** L'étape courante, ou `null` si la visite ne tourne pas. */
+export function currentStep(state: TourState): TourStepDef | null {
+  if (!state.running) return null;
+  return TOUR_STEPS[state.index] ?? null;
+}
+
+/** La route d'une étape, l'id du document de démo substitué. */
+export function resolveRoute(step: TourStepDef, demoDocId: number | null): string | undefined {
+  if (!step.route) return undefined;
+  if (step.route !== DEMO_ROUTE) return step.route;
+  return demoDocId === null ? undefined : `/reader/${demoDocId}`;
+}
+
+/** Rend le document emprunté. Best-effort : un échec ne bloque jamais la visite,
+ *  le serveur le nettoiera de toute façon au prochain démarrage. */
+function returnDemoDocument(): void {
+  void api.returnDemoDocument().catch(() => undefined);
 }
 
 export const useTour = create<TourState>((set, get) => ({
-  done: false,
-  furthest: null,
-  active: null,
+  running: false,
+  index: 0,
+  demoDocId: null,
   hydrated: false,
+  done: false,
+  controls: null,
 
-  hydrate: (done, furthest) => set({ done, furthest, hydrated: true }),
+  hydrate: (done) => set({ done, hydrated: true }),
 
-  request: (step) => {
-    const { done, hydrated, furthest, active } = get();
-    // Rien tant qu'on ne sait pas si la visite a déjà eu lieu : afficher une
-    // bulle puis la retirer une frame plus tard serait pire que de ne rien faire.
-    if (!hydrated || done || active !== null) return;
-    // Déjà vue : on ne la rejoue pas. Une étape qu'on a sautée dans le récit
-    // (on ouvre le lecteur avant d'avoir vu la bulle d'import) reste jouable —
-    // c'est le contexte qui commande, pas un compteur.
-    if (indexOf(step) <= indexOf(furthest)) return;
-    set({ active: step });
+  setControls: (controls) => set({ controls }),
+
+  start: async () => {
+    // Emprunter AVANT d'afficher la première bulle : la deuxième étape montre la
+    // bibliothèque, et le document doit déjà y être. Le coût est un aller-retour
+    // local, invisible.
+    let demoDocId: number | null;
+    try {
+      const { document } = await api.borrowDemoDocument();
+      demoDocId = document?.id ?? null;
+    } catch {
+      // Ressource absente ou serveur grognon : on joue la visite sans son
+      // chapitre lecture. Un tutoriel amputé vaut mieux qu'un tutoriel qui
+      // s'arrête sur un message d'erreur au premier lancement du produit.
+      demoDocId = null;
+    }
+    set({ running: true, index: 0, demoDocId, done: false, hydrated: true });
+    void api.setPreferences({ tour_done: false }).catch(() => undefined);
   },
 
-  dismiss: () => {
-    const { active } = get();
-    if (active === null) return;
-    const last = TOUR_ORDER[TOUR_ORDER.length - 1];
-    const done = active === last;
-    set({ active: null, furthest: active, done });
-    void api
-      .setPreferences(done ? { tour_step: active, tour_done: true } : { tour_step: active })
-      .catch(() => undefined);
-  },
+  next: () => {
+    const { index, demoDocId, controls } = get();
+    let target = index + 1;
 
-  // Cible introuvable ou disparue (le panneau Gemma remplace la bulle quand on
-  // l'ouvre). Sans ce relâchement, l'étape restait `active` sans rien afficher,
-  // et `request()` refusait toutes les suivantes : la visite se bloquait en
-  // silence, sur un écran parfaitement normal.
-  //
-  // On NE marque PAS l'étape comme vue : elle se rejouera quand son contexte
-  // reviendra, ce qui est exactement ce qu'on veut d'une visite pilotée par le
-  // contexte plutôt que par un compteur.
-  release: () => set({ active: null }),
+    // Sans document emprunté, tout le chapitre lecture saute d'un bloc.
+    if (demoDocId === null) {
+      while (target < TOUR_STEPS.length && TOUR_STEPS[target].needsDemo) target += 1;
+    }
+
+    if (target >= TOUR_STEPS.length) {
+      returnDemoDocument();
+      set({ running: false, done: true, demoDocId: null, controls: null });
+      void api.setPreferences({ tour_done: true }).catch(() => undefined);
+      return;
+    }
+
+    // On rend le document en QUITTANT le chapitre lecture, et non à la toute
+    // fin : la dernière bulle montre une bibliothèque vide en disant « à toi
+    // d'importer le tien », ce qui ne marche que s'il en est déjà sorti.
+    //
+    // La condition porte sur le CHAPITRE et non sur `needsDemo` : l'étape qui
+    // commente la carte du document de démonstration est dans la bibliothèque
+    // tout en ayant besoin de lui, et rendait donc le document six étapes trop
+    // tôt — emportant avec elle tout le chapitre lecture, désormais injouable.
+    if (TOUR_STEPS[index]?.chapter === "reading" && TOUR_STEPS[target].chapter !== "reading") {
+      returnDemoDocument();
+      set({ demoDocId: null, controls: null });
+    }
+
+    set({ index: target });
+    // Après le `set` : le `enter` peut vouloir agir sur l'écran de l'étape.
+    TOUR_STEPS[target].enter?.({ demo: controls });
+  },
 
   skip: () => {
-    set({ active: null, done: true });
+    returnDemoDocument();
+    set({ running: false, done: true, demoDocId: null, controls: null });
     void api.setPreferences({ tour_done: true }).catch(() => undefined);
-  },
-
-  // « Aide ▸ Tutoriel » : la seule façon de revenir sur une visite terminée ou
-  // refusée. On efface les DEUX préférences, sinon `request()` refuserait la
-  // première étape au motif qu'elle est déjà la plus avancée vue.
-  //
-  // La première bulle est posée ici plutôt que laissée à `request("import")` :
-  // l'écran d'accueil peut être DÉJÀ monté quand on clique dans le menu, et son
-  // effet ne se rejouerait pas. Si sa cible n'est pas encore là (on arrivait
-  // d'un autre écran), `Coachmark` patiente ~2 s puis relâche l'étape, qui
-  // reste due — c'est exactement le comportement voulu.
-  restart: () => {
-    set({ done: false, furthest: null, active: TOUR_ORDER[0], hydrated: true });
-    void api.setPreferences({ tour_done: false, tour_step: "none" }).catch(() => undefined);
   },
 }));
 
-// Barre de menu native (« Aide ▸ Tutoriel »). Le menu vit côté Python : il ne
-// peut pas appeler le store, il émet cet événement — même pont que le thème
-// (`metacapp:theme`, cf. theme/useTheme.ts).
+// Barre de menu native (« Aide ▸ Tutoriel ») et bouton « Revoir le tutoriel »
+// des réglages. Le menu vit côté Python : il ne peut pas appeler le store, il
+// émet cet événement — même pont que le thème (cf. theme/useTheme.ts).
 window.addEventListener("metacapp:tour", () => {
-  useTour.getState().restart();
+  void useTour.getState().start();
 });
 
-/** Convertit la préférence stockée en étape. Une valeur inconnue vaut « aucune ». */
-export function toStep(value: string | undefined): TourStep | null {
-  return TOUR_ORDER.includes(value as TourStep) ? (value as TourStep) : null;
-}
+export { TOUR_STEPS };
