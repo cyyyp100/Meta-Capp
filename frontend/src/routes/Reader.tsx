@@ -16,7 +16,7 @@ import { PageTextLayer } from "../features/reader/PageTextLayer";
 import { placedBoxes } from "../features/reader/textLayer";
 import { EntrySas } from "../features/session/EntrySas";
 import { ExitSas } from "../features/session/ExitSas";
-import { useTour } from "../features/tour/useTour";
+import { currentStep, useTour } from "../features/tour/useTour";
 import { PostExitRestSas } from "../features/session/PostExitRestSas";
 import { useT } from "../i18n";
 
@@ -63,6 +63,27 @@ function mergeLineRects(rects: number[][]): number[][] {
     merged.push(cur);
   }
   return merged;
+}
+
+/**
+ * Boîte englobante des surlignages d'une page, en pixels d'écran.
+ *
+ * Sert d'ancre à l'étape de la visite qui explique « elle surligne le passage
+ * dont elle parle » : le voile éclaire ce rectangle en même temps que la
+ * réponse de Gemma. Sans lui, l'étape désignait le panneau et laissait le
+ * passage cité dans le noir — exactement ce qu'elle demande de regarder.
+ */
+function highlightBounds(groups: { rect: number[] }[], scale: number) {
+  const left = Math.min(...groups.map((g) => g.rect[0]));
+  const top = Math.min(...groups.map((g) => g.rect[1]));
+  const right = Math.max(...groups.map((g) => g.rect[2]));
+  const bottom = Math.max(...groups.map((g) => g.rect[3]));
+  return {
+    left: left * scale,
+    top: top * scale,
+    width: (right - left) * scale,
+    height: (bottom - top) * scale,
+  };
 }
 
 const selBtn: React.CSSProperties = {
@@ -291,6 +312,15 @@ export function Reader() {
   // WebSocket — sur un document qui vient d'être supprimé.
   const [demo] = useState(() => useTour.getState().demoDocId === id);
   const setTourControls = useTour((s) => s.setControls);
+  // Chapitre lecture de la visite : la vue ne bouge plus. Défilement, molette et
+  // glissé horizontal sont neutralisés — la découpe du voile est calculée à
+  // partir de la position des éléments à l'écran, et tout ce qui les déplace
+  // pendant qu'on lit la bulle la décale d'autant. On cale la vue une fois
+  // (`pinPassage`), puis plus rien ne la déplace.
+  const tourRunning = useTour((s) => s.running);
+  const frozen = demo && tourRunning;
+  const frozenRef = useRef(frozen);
+  frozenRef.current = frozen;
   const gemmaControls = useRef<{ openPanel: () => void; play: (beat: DemoBeat) => void } | null>(null);
   // Les métriques du sas de sortie sont inventées : elles décrivent une lecture
   // plausible, pas une mesure. Les intitulés de réflexion sont traduits ici,
@@ -322,6 +352,16 @@ export function Reader() {
       // Le sas d'entrée recouvre la page : sans ce passage explicite, l'étape
       // suivante s'ancrerait sur une page cachée derrière son voile.
       enterReading: () => setEntered(true),
+      // Le bas de la première page : c'est là que vit la section que Gemma
+      // cite, et donc ce que les sept étapes suivantes commentent. Aligné sur
+      // le bas du cadre plutôt que centré — la page suivante n'a rien à faire
+      // à l'écran pendant qu'on parle de celle-ci.
+      pinPassage: () => {
+        const view = scrollRef.current;
+        const page = view?.querySelector<HTMLElement>('[data-page="1"]');
+        if (!view || !page) return;
+        view.scrollTop += page.getBoundingClientRect().bottom - view.getBoundingClientRect().bottom;
+      },
       openPanel: () => gemmaControls.current?.openPanel(),
       play: (beat) => gemmaControls.current?.play(beat),
       endSession: () => setExitMetrics(demoMetricsRef.current),
@@ -394,6 +434,7 @@ export function Reader() {
     const el = scrollRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      if (frozenRef.current) return;
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         captureZoomAnchor(e.clientY);
@@ -414,7 +455,7 @@ export function Reader() {
   // marges (jamais sur une page, qui reste sélectionnable). Indépendant du scroll
   // -> fonctionne aussi pendant une question bloquante.
   function startPan(e: React.MouseEvent) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || frozenRef.current) return;
     if ((e.target as HTMLElement).closest("[data-page]")) return;
     panDragRef.current = { startX: e.clientX, startPan: panX };
     setPanning(true);
@@ -651,6 +692,17 @@ export function Reader() {
     setLocked(active);
   }
 
+  /** Sortie du sas d'entrée : on lit. */
+  function startReading() {
+    setEntered(true);
+    // Et le sas rend la main à la visite : la dernière carte du warm-up franchie
+    // fait entrer dans la lecture, donc l'étape qui expliquait les cartes n'a
+    // plus de cible. Sans ça, sa bulle attendait cinq secondes dans le vide
+    // avant que la visite ne renonce à trouver son ancre.
+    const tour = useTour.getState();
+    if (currentStep(tour)?.id === "warmup") tour.next();
+  }
+
   async function handleEnd() {
     // Démonstration : le bilan est écrit d'avance, il n'y a pas de session à
     // clore. C'est aussi le chemin qu'emprunte la visite pour faire apparaître
@@ -681,7 +733,14 @@ export function Reader() {
   const sizes = data?.page_sizes_pts ?? [];
 
   return (
-    <div ref={rootRef} style={{ position: "relative", height: "100%" }}>
+    // `overflow: hidden` : le lecteur occupe l'écran, rien ne doit en sortir.
+    // La bulle de Gemma est un enfant ABSOLU de cette racine, à une position
+    // mémorisée d'une séance à l'autre ; rouverte dans une fenêtre plus petite,
+    // elle se retrouvait au-delà du bord droit, allongeait le document et
+    // donnait au tout une barre de défilement horizontale. Un simple geste
+    // latéral décalait alors l'écran entier — barre du haut comprise, dont le
+    // bouton « Terminer » sortait par la gauche.
+    <div ref={rootRef} style={{ position: "relative", height: "100%", overflow: "hidden" }}>
       <div
         ref={scrollRef}
         onMouseDown={startPan}
@@ -690,7 +749,7 @@ export function Reader() {
           // Vertical : figé pendant une question bloquante. Horizontal : jamais de
           // scroll natif, le déplacement passe par `panX` (transform) -> reste actif
           // même verrouillé.
-          overflowY: locked ? "hidden" : "auto",
+          overflowY: locked || frozen ? "hidden" : "auto",
           overflowX: "hidden",
           background: "var(--bg-alt)",
           cursor: panning ? "grabbing" : undefined,
@@ -811,6 +870,16 @@ export function Reader() {
                       ))}
                     </svg>
                   ) : null}
+                  {/* Ancre de la visite guidée sur le passage cité (cf.
+                      `highlightBounds`). Invisible et inerte : elle ne sert
+                      qu'à donner un rectangle à éclairer au voile. */}
+                  {demo && highlightsByPage[n]?.length ? (
+                    <div
+                      aria-hidden
+                      data-tour="quote"
+                      style={{ position: "absolute", ...highlightBounds(highlightsByPage[n], scale), pointerEvents: "none" }}
+                    />
+                  ) : null}
                   {/* Rappel libre : cache opaque sur le passage à restituer. Il
                       recouvre le calque de texte, donc on ne peut ni le lire ni
                       le sélectionner tant que la réponse n'est pas donnée. */}
@@ -837,7 +906,7 @@ export function Reader() {
                     </svg>
                   ) : null}
                   {/* Calque de texte transparent : sélection native par-dessus l'image. */}
-                  {words ? <PageTextLayer words={words} scale={scale} tourAnchor={n === 1} /> : null}
+                  {words ? <PageTextLayer words={words} scale={scale} /> : null}
                   {/* Surlignages mémorisés (cliquables pour suppression). */}
                   {pageSaved.length ? (
                     <svg
@@ -1018,7 +1087,7 @@ export function Reader() {
       />
 
       {data && !entered && (
-        <EntrySas docId={id} title={data.title} onStart={() => setEntered(true)} demo={demo} />
+        <EntrySas docId={id} title={data.title} onStart={startReading} demo={demo} />
       )}
 
       {exitMetrics && <ExitSas metrics={exitMetrics} onClose={handleExitSasClose} demo={demo} />}

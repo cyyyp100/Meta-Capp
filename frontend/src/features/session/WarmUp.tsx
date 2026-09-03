@@ -9,7 +9,16 @@ import { SasOverlay } from "./SasOverlay";
 // Warm-up clic-only partagé (SAS d'entrée PDF et séance de langue) : clic => retourne ;
 // re-clic => revue neutre (avance la répétition espacée) + carte suivante. « Passer »
 // démarre la session. Source partagée pour éviter la divergence entre les deux flux.
-export function WarmUp({ cards, onDone }: { cards: Flashcard[]; onDone: () => void }) {
+export function WarmUp({
+  cards,
+  onDone,
+  demo = false,
+}: {
+  cards: Flashcard[];
+  onDone: () => void;
+  /** Warm-up de la visite guidée : cartes fictives, aucune révision écrite. */
+  demo?: boolean;
+}) {
   const t = useT();
   const [i, setI] = useState(0);
   const [flipped, setFlipped] = useState(false);
@@ -20,7 +29,9 @@ export function WarmUp({ cards, onDone }: { cards: Flashcard[]; onDone: () => vo
       setFlipped(true);
       return;
     }
-    api.reviewFlashcard(card.id, "partial").catch(() => {});
+    // La démonstration n'écrit rien : ses cartes n'existent pas en base, et une
+    // révision enregistrée avancerait une répétition espacée qui n'a pas lieu.
+    if (!demo) api.reviewFlashcard(card.id, "partial").catch(() => {});
     if (i + 1 >= cards.length) onDone();
     else {
       setI((v) => v + 1);
@@ -38,6 +49,7 @@ export function WarmUp({ cards, onDone }: { cards: Flashcard[]; onDone: () => vo
           <WhyButton whyKey="warmup" />
         </div>
         <div
+          data-tour="warmup-card"
           onClick={advance}
           style={{ minHeight: "min(62vh, 480px)", display: "grid", placeItems: "center", padding: 44, borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: flipped ? "var(--warning-soft)" : "var(--surface)", boxShadow: "var(--shadow-md)", cursor: "pointer", fontSize: 24, fontFamily: "var(--font-title)" }}
         >

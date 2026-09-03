@@ -112,10 +112,10 @@ export function ExitSas({
 
   return (
     <SasOverlay variant="scrim">
-      <SasCard className="max-h-[88vh] overflow-y-auto">
+      <SasCard data-tour="exit" className="max-h-[88vh] overflow-y-auto">
         <div className="flex items-start justify-between gap-3.5">
           <div>
-            <h2 data-tour="exit" className="m-0 mb-1 font-serif text-h2 font-bold">{t("exit.title")}</h2>
+            <h2 className="m-0 mb-1 font-serif text-h2 font-bold">{t("exit.title")}</h2>
             <p className="m-0 text-muted-foreground">{t("exit.subtitle")}</p>
           </div>
           <WhyButton whyKey="exit" />

@@ -255,6 +255,69 @@ def _open_document(path: str) -> int | None:
         return None
 
 
+# Ce qui, modifié, périme `frontend/dist`. `vite.config.ts` et les manifestes en
+# font partie : changer un alias ou une dépendance change le bundle sans qu'un
+# seul `.tsx` ait bougé.
+_FRONTEND_SOURCES = ("src", "index.html", "package.json", "package-lock.json", "vite.config.ts", "tsconfig.json")
+
+
+def _newest_mtime(path: Path) -> float:
+    """Date de la modification la plus récente sous `path` (0.0 s'il n'existe pas)."""
+    if not path.exists():
+        return 0.0
+    if path.is_file():
+        return path.stat().st_mtime
+    newest = 0.0
+    for child in path.rglob("*"):
+        try:
+            if child.is_file():
+                newest = max(newest, child.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def _build_frontend_if_needed() -> None:
+    """Compile le frontend s'il manque — OU s'il date d'avant ses sources.
+
+    La condition ne portait que sur l'ABSENCE du bundle. Un `dist/` présent mais
+    périmé était donc servi tel quel : on relançait l'application après avoir
+    corrigé un composant et on regardait, sans le savoir, le bundle de la veille
+    — puis on cherchait le bug dans la correction. Une compilation incrémentale
+    coûte quelques centaines de millisecondes ; ce quiproquo-là coûte une heure.
+
+    En mode gelé, `frontend/` n'est pas embarqué : rien à comparer, rien à faire.
+    """
+    frontend = ROOT / "frontend"
+    if getattr(sys, "frozen", False) or not frontend.is_dir():
+        return
+
+    has_dist = FRONTEND_DIST.is_dir()
+    if has_dist:
+        built = _newest_mtime(FRONTEND_DIST)
+        sources = max(_newest_mtime(frontend / name) for name in _FRONTEND_SOURCES)
+        if sources <= built:
+            return
+        logger.info("Frontend périmé — recompilation (npm run build)…")
+    else:
+        logger.info("Frontend non compilé — build automatique (npm run build)…")
+
+    import subprocess
+
+    try:
+        subprocess.run(["npm", "run", "build"], cwd=str(frontend), check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        logger.error(
+            "Build du frontend impossible (%s). Lance manuellement :\n"
+            "    cd frontend && npm install && npm run build",
+            exc,
+        )
+        # Sans bundle du tout il n'y a pas d'application à montrer ; avec un
+        # bundle périmé, l'ancien vaut mieux que rien.
+        if not has_dist:
+            sys.exit(1)
+
+
 def main(pdf_path: str | None = None, debug: bool = False) -> None:
     # Logging fichier + console (rotation) : indispensable en app packagée pour
     # que « Exporter les logs » ait de la matière (diagnostic sur consentement).
@@ -279,19 +342,7 @@ def main(pdf_path: str | None = None, debug: bool = False) -> None:
         uvicorn.run(create_app(), host=HOST, port=PORT, log_level="info")
         return
 
-    if not FRONTEND_DIST.is_dir():
-        logger.info("Frontend non compilé — build automatique (npm run build)…")
-        import subprocess
-
-        try:
-            subprocess.run(["npm", "run", "build"], cwd=str(ROOT / "frontend"), check=True)
-        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-            logger.error(
-                "Build du frontend impossible (%s). Lance manuellement :\n"
-                "    cd frontend && npm install && npm run build",
-                exc,
-            )
-            sys.exit(1)
+    _build_frontend_if_needed()
 
     # S1 : nonce de lancement — généré ici, exigé par l'API/WS, transmis au
     # frontend via l'URL d'ouverture (il le pose en cookie SameSite=Strict).

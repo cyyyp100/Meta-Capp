@@ -67,12 +67,27 @@ const LS_LAYOUT = "gemma:layout";
 const LS_DOCKW = "gemma:dockWidth";
 const LS_BUBBLE = "gemma:bubblePos";
 
+/** Ramène une position mémorisée dans la fenêtre courante.
+ *
+ *  Les positions sont écrites au pixel où on a lâché le panneau, dans la
+ *  fenêtre d'alors. Rouvrir l'application plus petite — sortie du plein écran,
+ *  écran externe débranché — replaçait la bulle au-delà du bord : invisible,
+ *  et surtout hors du cadre du lecteur, qu'elle allongeait d'autant. */
+function clampToWindow(rect: Rect): Rect {
+  const margin = 12;
+  return {
+    ...rect,
+    x: Math.min(Math.max(rect.x, margin), Math.max(margin, window.innerWidth - rect.width - margin)),
+    y: Math.min(Math.max(rect.y, margin), Math.max(margin, window.innerHeight - rect.height - margin)),
+  };
+}
+
 function loadRect(key: string, fallback: Rect): Rect {
   try {
     const raw = localStorage.getItem(key);
     if (raw) {
       const o = JSON.parse(raw);
-      if (typeof o?.x === "number" && typeof o?.width === "number") return o;
+      if (typeof o?.x === "number" && typeof o?.width === "number") return clampToWindow(o);
     }
   } catch {
     /* ignore */
@@ -135,7 +150,15 @@ export function GemmaPanel({
 
   // Disposition / taille de la zone de discussion (libre + presets), persistées.
   const floatDefault: Rect = { x: Math.max(20, window.innerWidth - 640), y: Math.max(20, window.innerHeight - 560), width: 360, height: 480 };
-  const [layout, setLayout] = useState<Layout>(() => (localStorage.getItem(LS_LAYOUT) === "dockRight" ? "dockRight" : "float"));
+  // Visite guidée : Gemma est ancrée à droite, point. Les sept étapes qui la
+  // commentent désignent tour à tour son corps, son sélecteur de mode, ses
+  // raccourcis et sa carte de question ; un panneau flottant, à une position
+  // héritée d'une séance précédente et déplaçable d'un glissé, ferait sauter
+  // ces découpes d'une étape à l'autre. Le réglage de l'utilisateur n'est pas
+  // écrasé pour autant : en démonstration, on ne le relit ni ne l'écrit.
+  const [layout, setLayout] = useState<Layout>(() =>
+    demo ? "dockRight" : localStorage.getItem(LS_LAYOUT) === "dockRight" ? "dockRight" : "float",
+  );
   const [floatRect, setFloatRect] = useState<Rect>(() => loadRect(LS_RECT, floatDefault));
   const [dockWidth, setDockWidth] = useState<number>(() => Number(localStorage.getItem(LS_DOCKW)) || 380);
   const [parentSize, setParentSize] = useState({ w: window.innerWidth, h: window.innerHeight });
@@ -339,7 +362,9 @@ export function GemmaPanel({
     return () => window.removeEventListener("resize", measure);
   }, [open, layout]);
 
-  useEffect(() => save(LS_LAYOUT, layout), [layout]);
+  useEffect(() => {
+    if (!demo) save(LS_LAYOUT, layout);
+  }, [layout, demo]);
 
   // Géométrie courante du panneau selon la disposition choisie.
   const dockRect: Rect = { x: Math.max(0, parentSize.w - dockWidth), y: DOCK_TOP, width: dockWidth, height: Math.max(240, parentSize.h - DOCK_TOP - 12) };
@@ -445,7 +470,7 @@ export function GemmaPanel({
   }
 
   if (!open) {
-    return <GemmaBubble scanning={scanning} onOpen={() => setOpen(true)} title={t("gemma.open")} />;
+    return <GemmaBubble scanning={scanning} onOpen={() => setOpen(true)} title={t("gemma.open")} fixed={demo} />;
   }
 
   return (
@@ -455,7 +480,9 @@ export function GemmaPanel({
       minWidth={300}
       minHeight={layout === "dockRight" ? 240 : 320}
       bounds="parent"
-      disableDragging={layout === "dockRight"}
+      // Rien ne bouge pendant la visite : ni déplacement, ni redimensionnement.
+      enableResizing={!demo}
+      disableDragging={demo || layout === "dockRight"}
       dragHandleClassName="gemma-drag"
       // Les contrôles vivent DANS la poignée de déplacement : sans ce `cancel`, cliquer
       // le sélecteur de mode arme un déplacement, et la liste native avale le mouseup
@@ -737,16 +764,28 @@ const chipClose: React.CSSProperties = {
 // ── Bulle Gemma : sphère 3D à deux yeux mobiles, déplaçable. ────────────────────
 // Au repos, les pupilles suivent le curseur. Pendant que Gemma inspecte la page
 // (`scanning`), la bulle se tourne vers le PDF et fixe son regard de ce côté.
-function GemmaBubble({ scanning, onOpen, title }: { scanning: boolean; onOpen: () => void; title: string }) {
+function GemmaBubble({
+  scanning,
+  onOpen,
+  title,
+  fixed = false,
+}: {
+  scanning: boolean;
+  onOpen: () => void;
+  title: string;
+  /** Visite guidée : toujours le même coin, et pas déplaçable. */
+  fixed?: boolean;
+}) {
   const SIZE = 64;
   const sphereRef = useRef<HTMLButtonElement>(null);
   const movedRef = useRef(false);
   const [pupil, setPupil] = useState({ x: 0, y: 0 });
 
   const start: Rect = { ...loadRect(LS_BUBBLE, { x: 0, y: 0, width: SIZE, height: SIZE }) };
-  const defaultPos = start.x || start.y
-    ? { x: start.x, y: start.y }
-    : { x: Math.max(12, window.innerWidth - SIZE - 26), y: Math.max(12, window.innerHeight - SIZE - 26) };
+  const corner = { x: Math.max(12, window.innerWidth - SIZE - 26), y: Math.max(12, window.innerHeight - SIZE - 26) };
+  // La position mémorisée est ignorée pendant la visite : l'étape qui présente
+  // la bulle doit la trouver au même endroit chez tout le monde.
+  const defaultPos = fixed || !(start.x || start.y) ? corner : { x: start.x, y: start.y };
 
   // Suivi du curseur (désactivé en scanning : le regard est épinglé vers le PDF).
   useEffect(() => {
@@ -770,6 +809,7 @@ function GemmaBubble({ scanning, onOpen, title }: { scanning: boolean; onOpen: (
     <Rnd
       default={{ x: defaultPos.x, y: defaultPos.y, width: SIZE, height: SIZE }}
       enableResizing={false}
+      disableDragging={fixed}
       bounds="parent"
       onDragStart={() => { movedRef.current = false; }}
       onDrag={() => { movedRef.current = true; }}

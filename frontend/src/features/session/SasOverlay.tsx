@@ -67,13 +67,18 @@ export function SasOverlay({
 export function SasCard({
   children,
   className,
+  // La visite guidée éclaire le sas ENTIER, pas son titre : l'ancre est donc
+  // portée par la carte, et doit pouvoir lui être passée de l'extérieur.
+  "data-tour": dataTour,
 }: {
   children: React.ReactNode;
   className?: string;
+  "data-tour"?: string;
 }) {
   const reduce = useReducedMotion();
   return (
     <motion.div
+      data-tour={dataTour}
       className={cn(
         "w-[min(560px,92vw)] rounded-lg border border-border bg-surface p-8.5 shadow-e3",
         className,

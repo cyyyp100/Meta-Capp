@@ -11,6 +11,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/api/client";
+import { queryClient } from "@/api/queryClient";
 import { NAV } from "@/components/AppLayout";
 
 import { TOUR_STEPS } from "./steps";
@@ -27,6 +28,7 @@ vi.mock("@/api/client", () => ({
 const borrow = vi.mocked(api.borrowDemoDocument);
 const giveBack = vi.mocked(api.returnDemoDocument);
 const setPreferences = vi.mocked(api.setPreferences);
+const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue(undefined);
 
 /** Avance jusqu'à l'étape portant cet identifiant (bornes de sécurité). */
 function advanceTo(id: string) {
@@ -96,6 +98,35 @@ describe("le document emprunté est toujours rendu", () => {
     expect(setPreferences).toHaveBeenLastCalledWith({ tour_done: true });
     // Une fois en sortant du lecteur, une fois à la clôture : jamais zéro.
     expect(giveBack.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("la bibliothèque suit le document emprunté", () => {
+  // Troisième promesse : la carte de démonstration est VISIBLE pendant qu'on la
+  // commente. L'emprunt et la restitution ont lieu hors de l'arbre React ; sans
+  // invalidation, la grille garde la liste qu'elle a chargée en montant et la
+  // carte n'apparaît jamais — l'étape qui la désigne cherche alors une ancre
+  // qui n'existe pas.
+  it("invalide le cache dès l'emprunt", async () => {
+    await useTour.getState().start();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["library"] });
+  });
+
+  it("et à la restitution, une fois le serveur passé", async () => {
+    await useTour.getState().start();
+    invalidate.mockClear();
+
+    useTour.getState().skip();
+    // Invalider avant la fin du DELETE ferait recharger la grille pendant que
+    // le serveur efface encore : elle réafficherait le document rendu.
+    expect(invalidate).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["library"] }));
+  });
+
+  it("ne recharge rien quand il n'y a eu aucun emprunt", async () => {
+    borrow.mockResolvedValue({ document: null });
+    await useTour.getState().start();
+    expect(invalidate).not.toHaveBeenCalled();
   });
 });
 

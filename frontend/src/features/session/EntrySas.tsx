@@ -6,6 +6,9 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 import { api } from "../../api/client";
+import type { Flashcard } from "../../api/types";
+import { DEMO_CARDS } from "../reader/demoScript";
+import { currentStep, useTour } from "../tour/useTour";
 import { useT } from "../../i18n";
 import { WhyButton } from "../science/WhyButton";
 import { SasOverlay } from "./SasOverlay";
@@ -41,11 +44,15 @@ export function EntrySas({
    * Séance de démonstration de la visite guidée. Trois différences, toutes
    * pour la même raison — le sas est un rituel de RALENTISSEMENT, et on ne
    * ralentit pas quelqu'un qui découvre le produit :
-   *   * le compte à rebours passe de 60 s à quelques secondes ;
+   *   * le compte à rebours passe de 60 s à quelques secondes, et ne franchit
+   *     plus le sas de lui-même : c'est la visite qui le fait, au clic ;
    *   * l'accroche de curiosité est écrite d'avance (pas d'appel LLM, donc pas
    *     d'attente ni de dépendance à Ollama au premier lancement) ;
-   *   * pas de warm-up : réviser des cartes n'a aucun sens sur un document
-   *     qu'on n'a jamais lu, et l'utilisateur n'en a encore aucune.
+   *   * le warm-up joue DEUX cartes écrites d'avance (`DEMO_CARDS`) au lieu de
+   *     celles de la répétition espacée : l'utilisateur n'en a encore aucune, et
+   *     réviser le document qu'on s'apprête à découvrir n'aurait aucun sens.
+   *     Elles portent sur de la connaissance générale, se répondent sans rien
+   *     avoir lu, et rien n'est écrit quand on les franchit.
    */
   demo?: boolean;
 }) {
@@ -72,13 +79,38 @@ export function EntrySas({
   });
   const hookText = demo ? t("demo.entry_hook") : hook?.hook;
 
+  // Les cartes du warm-up : celles de la répétition espacée, ou les deux cartes
+  // écrites d'avance de la visite.
+  const demoCards: Flashcard[] = DEMO_CARDS.map((c) => ({
+    id: c.id,
+    front: t(c.frontKey),
+    back: t(c.backKey),
+    tags: [],
+    difficulty: 0,
+    source: "demo",
+    document_title: null,
+    chapter_title: null,
+  }));
+
+  // C'est la VISITE qui fait passer aux cartes, à l'étape qui les explique, et
+  // non le compte à rebours : il ne franchit plus rien de lui-même (cf. juste
+  // au-dessus), pour qu'aucun écran ne change au milieu d'une bulle.
+  const atWarmUpStep = useTour((s) => currentStep(s)?.id === "warmup");
+  useEffect(() => {
+    if (demo && atWarmUpStep) setPhase("review");
+  }, [demo, atWarmUpStep]);
+
   // Compte à rebours (phase intro) : à 0, on passe au warm-up (pas direct à la lecture).
   useEffect(() => {
     if (phase !== "intro") return;
     if (left <= 0) {
-      // En démonstration il n'y a pas de warm-up : on entre dans la lecture.
-      if (demo) onStart();
-      else setPhase("review");
+      // En démonstration, le compte à rebours MONTRE le rituel, il ne le
+      // franchit pas : il s'arrête à 0 et le sas reste à l'écran. Il appelait
+      // `onStart()`, et l'écran changeait donc de lui-même au milieu de la
+      // bulle qui explique le sas — la seule étape de la visite qu'on ne
+      // pouvait pas lire à son rythme. Ce qui fait entrer dans la lecture est
+      // un clic : « Suivant » dans la visite, ou « Continuer » ici.
+      if (!demo) setPhase("review");
       return;
     }
     const id = setTimeout(() => setLeft((l) => l - 1), 1000);
@@ -91,6 +123,7 @@ export function EntrySas({
   }, [phase, cards, onStart]);
 
   if (phase === "review") {
+    if (demo) return <WarmUp cards={demoCards} onDone={onStart} demo />;
     if (!cards) {
       return (
         <SasOverlay contained>
@@ -107,6 +140,11 @@ export function EntrySas({
   return (
     <SasOverlay contained>
       <motion.div
+        // La visite éclaire ce panneau ENTIER. L'ancre était sur le titre :
+        // la découpe ne montrait que deux lignes, et le rituel qu'on venait
+        // d'expliquer — l'accroche, l'anneau qui se remplit, le bouton —
+        // restait dans le noir avec le reste de l'écran.
+        data-tour="entry"
         className="max-w-[520px] px-8.5 text-center"
         initial={reduce ? false : { opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -115,7 +153,7 @@ export function EntrySas({
         <div className="mb-3 text-[13px] font-bold tracking-[1px] text-brand-ink uppercase">
           {t("entry.label")}
         </div>
-        <h2 data-tour="entry" className="m-0 mb-2.5 font-serif text-2xl font-bold text-foreground">{title}</h2>
+        <h2 className="m-0 mb-2.5 font-serif text-2xl font-bold text-foreground">{title}</h2>
         <p className="leading-relaxed text-text-soft">{t("entry.text")}</p>
         <div className="mt-3">
           <WhyButton whyKey="entry" />

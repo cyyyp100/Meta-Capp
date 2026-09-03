@@ -23,6 +23,7 @@
 import { create } from "zustand";
 
 import { api } from "@/api/client";
+import { queryClient } from "@/api/queryClient";
 
 import { DEMO_ROUTE, TOUR_STEPS, type TourStepDef } from "./steps";
 
@@ -30,6 +31,8 @@ import { DEMO_ROUTE, TOUR_STEPS, type TourStepDef } from "./steps";
 export interface DemoControls {
   /** Franchit le sas d'entrée : il recouvre la page qu'on veut ensuite montrer. */
   enterReading: () => void;
+  /** Cale la vue sur le passage que Gemma va citer, avant de la figer. */
+  pinPassage: () => void;
   openPanel: () => void;
   play: (beat: "answer" | "intervention" | "question") => void;
   endSession: () => void;
@@ -74,10 +77,30 @@ export function resolveRoute(step: TourStepDef, demoDocId: number | null): strin
   return demoDocId === null ? undefined : `/reader/${demoDocId}`;
 }
 
+/** La bibliothèque vient de changer sans que React Query l'ait demandé.
+ *
+ *  L'emprunt et la restitution du document de démonstration passent par ce
+ *  store, hors de l'arbre React : le cache de la grille ne pouvait pas le
+ *  savoir. Comme `refetchOnWindowFocus` est désactivé (fenêtre native), la
+ *  liste chargée au montage de l'accueil ne bougeait plus de la visite — la
+ *  carte de démonstration n'apparaissait donc jamais, l'étape qui la commente
+ *  ne trouvait pas son ancre, et la dernière bulle annonçait une bibliothèque
+ *  vidée d'un document qui y était encore affiché. */
+function refreshLibrary(): void {
+  void queryClient.invalidateQueries({ queryKey: ["library"] });
+}
+
 /** Rend le document emprunté. Best-effort : un échec ne bloque jamais la visite,
- *  le serveur le nettoiera de toute façon au prochain démarrage. */
+ *  le serveur le nettoiera de toute façon au prochain démarrage.
+ *
+ *  L'invalidation attend la fin de la requête : lancée avant, la grille se
+ *  rechargerait pendant que le serveur efface encore, et réafficherait le
+ *  document qu'on vient de rendre. */
 function returnDemoDocument(): void {
-  void api.returnDemoDocument().catch(() => undefined);
+  void api
+    .returnDemoDocument()
+    .catch(() => undefined)
+    .finally(refreshLibrary);
 }
 
 export const useTour = create<TourState>((set, get) => ({
@@ -107,6 +130,8 @@ export const useTour = create<TourState>((set, get) => ({
       demoDocId = null;
     }
     set({ running: true, index: 0, demoDocId, done: false, hydrated: true });
+    // Le document est en base ; la grille, elle, tient encore la liste d'avant.
+    if (demoDocId !== null) refreshLibrary();
     void api.setPreferences({ tour_done: false }).catch(() => undefined);
   },
 

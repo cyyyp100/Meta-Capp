@@ -28,6 +28,23 @@ export interface TourStepDef {
   target: string;
   /** Côté d'ancrage de la bulle. `right` par défaut. */
   side?: "top" | "right" | "bottom" | "left";
+  /**
+   * Autres `data-tour` à garder en clair, en plus de la cible.
+   *
+   * Une étape peut avoir besoin de montrer deux choses à la fois : la réponse
+   * de Gemma ET le passage qu'elle vient de surligner dans la page. Sans ça, on
+   * lit « elle surligne le passage dont elle parle » en regardant un passage
+   * noyé dans le voile.
+   */
+  reveal?: string[];
+  /**
+   * Étape dont la cible reste CLIQUABLE.
+   *
+   * La visite avale tous les clics (cf. `TourHost`) : un clic de trop dans le
+   * décor la fait dérailler. Une étape qui demande un geste plutôt qu'une
+   * lecture doit lever cette garde, sur sa cible et sur elle seule.
+   */
+  interactive?: boolean;
   chapter: TourChapter;
   /** Joué à l'ENTRÉE de l'étape : ouvrir un panneau, poser un message… */
   enter?: (ctx: TourContext) => void;
@@ -59,6 +76,17 @@ export const TOUR_STEPS: TourStepDef[] = [
   // `enter` du premier pas du chapitre : c'est la navigation vers le lecteur
   // qui monte le sas d'entrée, on n'a rien à jouer nous-mêmes.
   { id: "entry-sas", route: DEMO_ROUTE, target: "entry", side: "right", chapter: "reading", needsDemo: true },
+  // La seule étape où l'on FAIT au lieu de regarder. Quatre clics : retourner
+  // la première carte, passer à la seconde, la retourner, entrer dans la
+  // lecture. C'est le geste des flashcards en entier, et il se raconte mal.
+  {
+    id: "warmup",
+    target: "warmup-card",
+    side: "right",
+    chapter: "reading",
+    needsDemo: true,
+    interactive: true,
+  },
   {
     id: "page",
     target: "page",
@@ -68,8 +96,18 @@ export const TOUR_STEPS: TourStepDef[] = [
     enter: (ctx) => ctx.demo?.enterReading(),
   },
   { id: "toolbar", target: "toolbar", side: "bottom", chapter: "reading", needsDemo: true },
-  { id: "select", target: "sel-hint", side: "bottom", chapter: "reading", needsDemo: true },
-  { id: "gemma-bubble", target: "gemma", side: "left", chapter: "reading", needsDemo: true },
+  // À partir d'ici et jusqu'au sas de sortie, la vue ne bouge plus : on se cale
+  // une fois sur le passage que Gemma va citer, et le lecteur est figé (cf.
+  // `Reader`). Une découpe qui se déplace pendant qu'on lit la bulle qui la
+  // commente est le seul défaut qu'une coach mark ne pardonne pas.
+  {
+    id: "gemma-bubble",
+    target: "gemma",
+    side: "left",
+    chapter: "reading",
+    needsDemo: true,
+    enter: (ctx) => ctx.demo?.pinPassage(),
+  },
   {
     id: "gemma-panel",
     target: "gemma-body",
@@ -84,6 +122,9 @@ export const TOUR_STEPS: TourStepDef[] = [
     side: "left",
     chapter: "reading",
     needsDemo: true,
+    // Le passage surligné est éclairé avec la réponse : c'est le lien entre les
+    // deux que l'étape raconte, et il ne se voit que si on voit les deux.
+    reveal: ["quote"],
     enter: (ctx) => ctx.demo?.play("answer"),
   },
   { id: "gemma-mode", target: "gemma-mode", side: "bottom", chapter: "reading", needsDemo: true },
@@ -124,6 +165,10 @@ export const TOUR_STEPS: TourStepDef[] = [
   // ── Chapitre 3 : ce que l'application a retenu ──────────────────────────
   // On rend le document de démonstration ICI, en quittant le lecteur : la
   // bibliothèque doit être vide quand on y revient à la dernière étape.
+  // Deux étapes pour le profil, comme pour chaque destination du rail : d'abord
+  // le bouton qui y mène, ensuite ce qu'on y trouve. Le radar arrivait sans que
+  // personne n'ait montré par où on y revient.
+  { id: "nav-profil", route: "/stats", target: "nav-profile", side: "right", chapter: "profile" },
   { id: "profil", route: "/stats", target: "profil", side: "left", chapter: "profile" },
   { id: "progress", route: "/stats/progress", target: "progress", side: "bottom", chapter: "profile" },
 

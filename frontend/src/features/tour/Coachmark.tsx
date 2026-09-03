@@ -6,13 +6,20 @@
 // de tour apporterait son propre positionnement, son propre voile et son propre
 // vocabulaire d'animation — trois doublons.
 //
-// Le voile est un `box-shadow` de très grand rayon posé sur un rectangle placé
-// aux coordonnées de la cible : il assombrit tout SAUF la cible, sans jamais la
-// recouvrir. Un vrai calque avec `clip-path` ferait le même effet mais
-// intercepterait les clics ; ici la cible reste utilisable pendant que la bulle
-// l'explique, ce qui est tout l'intérêt d'une coach mark.
+// Le voile est un calque SVG masqué : un rectangle noir à 55 % couvrant l'écran,
+// dans lequel un masque perce la (ou les) cible(s) de l'étape. C'était un
+// `box-shadow` de très grand rayon, qui ne sait éclairer QU'UNE zone — or une
+// étape peut avoir besoin d'en montrer deux (la réponse de Gemma et le passage
+// qu'elle surligne dans la page, qui sinon reste dans le noir).
+//
+// Il ne prend AUCUN événement : ni clic, ni molette, ni glissé. Neutraliser les
+// commandes de l'application pendant la visite est nécessaire — un clic de trop
+// dans le décor la fait dérailler — mais c'est le travail d'un intercepteur de
+// CLIC (`TourHost`), pas d'un calque qui avale tout. Un calque qui avale tout
+// gèle aussi le défilement de la page et le glissé du PDF, c'est-à-dire les
+// gestes qu'on est justement en train d'expliquer.
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -37,12 +44,77 @@ const PADDING = 8;
  *  qui ne dit pas son nom, donc le pire des deux comportements. */
 const MISSING_LIMIT = 10;
 
+/** Hauteur majorée d'une bulle : un titre sur deux lignes, quatre de texte et
+ *  la rangée de boutons. Sert à savoir si elle tiendrait au-dessus ou en
+ *  dessous d'une cible — sa largeur, elle, se mesure exactement. */
+const BUBBLE_HEIGHT = 240;
+
+/** Largeur réelle de la bulle. `w-80` vaut 20 rem, et la racine est mise à
+ *  l'échelle par le réglage de taille de texte : 320 px en dur se tromperait
+ *  chez quiconque a grossi l'interface. */
+function bubbleWidth(): number {
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  return 20 * rem;
+}
+
+function intersectsViewport(rect: DOMRect): boolean {
+  return (
+    rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth
+  );
+}
+
+/**
+ * L'ancre de la bulle : la partie visible de la cible, rétrécie jusqu'à ce que
+ * la bulle tienne du côté demandé.
+ *
+ * Deux pannes distinctes, un seul remède. D'abord une cible plus grande que la
+ * fenêtre — page de PDF, panneau docké de haut en bas : ancrée sur sa boîte
+ * COMPLÈTE, la bulle se posait le long d'un bord situé hors cadre, et Radix la
+ * tronquait contre la fenêtre. Ensuite, et c'est le cas vicieux : une cible
+ * large laisse parfois trop peu de place des DEUX côtés (une page de 820 px
+ * dans une fenêtre de 1280 en laisse 230 de chaque côté, la bulle en demande
+ * 336). Radix bascule alors d'un côté à l'autre, ne trouve de place nulle part
+ * — son `shift` ne joue que sur l'axe transverse — et la laisse déborder.
+ *
+ * On rétrécit donc l'ANCRE, jamais la découpe : la bulle vient se poser par
+ * dessus la cible, ce qui est moins bien qu'à côté et infiniment mieux que hors
+ * de l'écran. La découpe, elle, garde la boîte entière — c'est l'objet qu'on
+ * désigne, et l'éclairer à moitié parce qu'il dépasse n'aurait aucun sens.
+ */
+function anchorFor(rect: DOMRect, side: "top" | "right" | "bottom" | "left") {
+  const margin = 8;
+  const gap = 16; // `sideOffset` de la bulle
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  let left = Math.max(rect.left, margin);
+  let top = Math.max(rect.top, margin);
+  let right = Math.min(rect.right, vw - margin);
+  let bottom = Math.min(rect.bottom, vh - margin);
+  // Cible entièrement hors cadre : on rend sa boîte telle quelle, Radix fera
+  // au mieux — mais `measure()` ne devrait pas nous mettre dans ce cas.
+  if (right <= left || bottom <= top) {
+    return { top: rect.top, left: rect.left, width: rect.width, height: rect.height };
+  }
+
+  const bw = bubbleWidth();
+  if (side === "right") right = Math.max(left + 1, Math.min(right, vw - margin - gap - bw));
+  if (side === "left") left = Math.min(right - 1, Math.max(left, margin + bw + gap));
+  if (side === "bottom") bottom = Math.max(top + 1, Math.min(bottom, vh - margin - gap - BUBBLE_HEIGHT));
+  if (side === "top") top = Math.min(bottom - 1, Math.max(top, margin + BUBBLE_HEIGHT + gap));
+
+  return { top, left, width: right - left, height: bottom - top };
+}
+
 export function Coachmark({ step, index }: { step: TourStepDef; index: number }) {
   const t = useT();
   const reduce = useReducedMotion();
   const next = useTour((s) => s.next);
   const skip = useTour((s) => s.skip);
-  const [rect, setRect] = useState<DOMRect | null>(null);
+  // La cible de l'étape, suivie de ce qu'elle veut révéler en plus. `rects[0]`
+  // est toujours la cible : c'est elle qui ancre la bulle.
+  const targets = useMemo(() => [step.target, ...(step.reveal ?? [])], [step.target, step.reveal]);
+  const [rects, setRects] = useState<DOMRect[]>([]);
 
   // La cible est résolue par `data-tour` : aucune `ref` à faire remonter, aucune
   // signature de composant modifiée pour la visite.
@@ -58,21 +130,37 @@ export function Coachmark({ step, index }: { step: TourStepDef; index: number })
     let missing = 0;
     let scrolled = false;
     function measure() {
-      const target = document.querySelector<HTMLElement>(`[data-tour="${step.target}"]`);
+      const found = targets.map((name) => document.querySelector<HTMLElement>(`[data-tour="${name}"]`));
+      const target = found[0];
       if (target) {
         missing = 0;
         // La cible peut être hors du cadre : une bulle ancrée sur un élément
         // qu'on ne voit pas ne montre rien. UNE seule fois, à la découverte :
         // rejouer le défilement à chaque sondage empêcherait de bouger dans la
         // page pendant qu'on lit la bulle.
+        //
+        // On amène dans le cadre ce que l'étape veut RÉVÉLER en priorité : quand
+        // elle en désigne un, sa cible est un panneau flottant (donc déjà
+        // visible) et le passage révélé, lui, est dans la page — c'est celui-là
+        // qui risque d'être sous la ligne de flottaison.
+        //
+        // Et SEULEMENT si la cible est entièrement hors du cadre. `nearest` sur
+        // un élément plus haut que le cadre en aligne le haut, ce qui glissait
+        // la page du lecteur sous sa barre d'outils : la découpe montait alors
+        // jusqu'au bord supérieur de la fenêtre, barre comprise, au lieu de
+        // s'arrêter au bord de la page. La vue est déjà cadrée par la visite
+        // (cf. `pinPassage`) ; elle n'a pas à être corrigée ici.
         if (!scrolled) {
           scrolled = true;
-          target.scrollIntoView({ block: "nearest", inline: "nearest" });
+          const scrollTo = found[1] ?? target;
+          if (!intersectsViewport(scrollTo.getBoundingClientRect())) {
+            scrollTo.scrollIntoView({ block: "nearest", inline: "nearest" });
+          }
         }
-        setRect(target.getBoundingClientRect());
+        setRects(found.filter((el): el is HTMLElement => el !== null).map((el) => el.getBoundingClientRect()));
         return;
       }
-      setRect(null);
+      setRects([]);
       missing += 1;
       // Absente au bout de ~3 s : on PASSE à la suite plutôt que de rester
       // planté. Une ancre oubliée sur un écran doit coûter une bulle, jamais
@@ -90,13 +178,20 @@ export function Coachmark({ step, index }: { step: TourStepDef; index: number })
       window.removeEventListener("scroll", measure, true);
       window.clearInterval(timer);
     };
-  }, [step.target, next]);
+  }, [targets, next]);
 
   // Cible pas encore là : on n'affiche pas une bulle orpheline au milieu de
   // nulle part. Le sondage ci-dessus tranchera dans un sens ou dans l'autre.
+  const rect = rects[0];
   if (!rect || rect.width === 0) return null;
 
   const isLast = index === TOUR_STEPS.length - 1;
+  // Un identifiant par étape : pendant la transition d'`AnimatePresence`, deux
+  // voiles coexistent une fraction de seconde et un id partagé ferait résoudre
+  // le masque du nouveau sur les rectangles de l'ancien.
+  const maskId = `tour-veil-${step.id}`;
+  const side = step.side ?? "right";
+  const anchor = anchorFor(rect, side);
 
   return (
     <AnimatePresence>
@@ -108,30 +203,41 @@ export function Coachmark({ step, index }: { step: TourStepDef; index: number })
         exit={reduce ? undefined : { opacity: 0 }}
         transition={{ duration: 0.28, ease: [0.33, 1, 0.68, 1] }}
       >
-        {/* La découpe. `pointer-events: none` : la cible reste cliquable. */}
-        <div
-          aria-hidden
-          className="absolute rounded-md"
-          style={{
-            top: rect.top - PADDING,
-            left: rect.left - PADDING,
-            width: rect.width + PADDING * 2,
-            height: rect.height + PADDING * 2,
-            boxShadow: "0 0 0 9999px rgba(0,0,0,0.55)",
-            transition: "top 0.2s, left 0.2s, width 0.2s, height 0.2s",
-          }}
-        />
+        {/* Le voile et ses découpes. Le masque est en blanc (= opaque, on
+            assombrit) percé de noir (= transparent, on laisse en clair). */}
+        <svg aria-hidden className="absolute inset-0 size-full">
+          <defs>
+            <mask id={maskId}>
+              <rect x="0" y="0" width="100%" height="100%" fill="white" />
+              {rects.map((r, i) => (
+                <rect
+                  key={i}
+                  x={r.left - PADDING}
+                  y={r.top - PADDING}
+                  width={r.width + PADDING * 2}
+                  height={r.height + PADDING * 2}
+                  rx="6"
+                  fill="black"
+                  // Les propriétés géométriques SVG sont animables en CSS : la
+                  // découpe glisse d'une étape à l'autre au lieu de sauter.
+                  style={{ transition: "x 0.2s, y 0.2s, width 0.2s, height 0.2s" }}
+                />
+              ))}
+            </mask>
+          </defs>
+          <rect x="0" y="0" width="100%" height="100%" fill="rgba(0,0,0,0.55)" mask={`url(#${maskId})`} />
+        </svg>
 
         <Popover open>
           <PopoverAnchor asChild>
             <span
               aria-hidden
               className="absolute"
-              style={{ top: rect.top, left: rect.left, width: rect.width, height: rect.height }}
+              style={{ top: anchor.top, left: anchor.left, width: anchor.width, height: anchor.height }}
             />
           </PopoverAnchor>
           <PopoverContent
-            side={step.side ?? "right"}
+            side={side}
             align="start"
             sideOffset={16}
             collisionPadding={16}

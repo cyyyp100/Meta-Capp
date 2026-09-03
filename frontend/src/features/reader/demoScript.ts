@@ -39,6 +39,24 @@ export const DEMO_QUOTES = {
   explain: "The processor takes instructions in the form of machine code from the OS (binary) and executes them sequentially.",
 } as const;
 
+/**
+ * Les deux cartes du warm-up de démonstration.
+ *
+ * De la connaissance générale, et non le contenu du PDF : une carte de warm-up
+ * porte sur ce qu'on sait DÉJÀ, et celle-ci doit se répondre sans avoir rien lu
+ * du document, sinon la démonstration met en échec la première personne qui la
+ * voit. Ce sont des clés i18n, résolues à l'affichage comme le reste.
+ *
+ * Les identifiants sont négatifs : aucune ligne de `flashcards` ne peut porter
+ * ces valeurs, donc aucune révision ne peut être écrite par erreur sur une vraie
+ * carte. `WarmUp` n'appelle de toute façon pas la route de révision en
+ * démonstration, mais les deux verrous ne coûtent rien.
+ */
+export const DEMO_CARDS = [
+  { id: -1, frontKey: "demo.card_1_front", backKey: "demo.card_1_back" },
+  { id: -2, frontKey: "demo.card_2_front", backKey: "demo.card_2_back" },
+] as const;
+
 /** Ce que la fausse séance affiche dans le sas de sortie.
  *
  *  Des chiffres plausibles et modestes : le sas doit ressembler à ce qu'on

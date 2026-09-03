@@ -49,6 +49,39 @@ export function TourHost() {
   // Chaque étape sait où elle se joue ; on s'y rend si on n'y est pas déjà.
   const step = running ? TOUR_STEPS[index] : undefined;
   const route = step ? resolveRoute(step, demoDocId) : undefined;
+
+  // Les commandes de l'application sont neutralisées tant que la visite tourne :
+  // un clic sur « Terminer », sur un lien du rail ou sur une carte de document
+  // enverrait ailleurs un parcours scripté qui n'a aucun moyen de se rattraper.
+  //
+  // On intercepte le CLIC, en phase de capture, et rien d'autre. Un calque qui
+  // avale tous les événements — la première version — bloquait du même coup le
+  // défilement de la page et le glissé horizontal du PDF, c'est-à-dire les
+  // gestes que la visite est en train de montrer. Molette, glissé et sélection
+  // de texte ne changent l'état de personne : ils restent libres.
+  //
+  // En capture sur `document`, donc avant que React ne distribue quoi que ce
+  // soit : ses écouteurs sont posés sur la racine et sur le conteneur de portail
+  // (`body`), tous deux plus bas dans le chemin. La bulle, portée dans `body`
+  // par Radix, est la seule exception — sans quoi « Suivant » ne répondrait plus.
+  //
+  // Seconde exception : la cible d'une étape déclarée `interactive`, où le geste
+  // EST la démonstration (retourner une carte, passer à la suivante). Sa cible,
+  // et elle seule : le reste de l'écran reste inerte.
+  const clickable = step?.interactive ? step.target : null;
+  useEffect(() => {
+    if (!running) return;
+    const swallow = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-slot="popover-content"]')) return;
+      if (clickable && target?.closest(`[data-tour="${clickable}"]`)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    document.addEventListener("click", swallow, true);
+    return () => document.removeEventListener("click", swallow, true);
+  }, [running, clickable]);
+
   useEffect(() => {
     if (route && location.pathname !== route) navigate(route);
   }, [route, location.pathname, navigate]);
