@@ -28,7 +28,11 @@ from db.answers import save_answer
 from db.documents import get_document, update_last_page
 from db.flashcards import get_due_flashcards, save_flashcard
 from db.page_dwell import save_page_dwell
-from db.questions import save_assistant_exchange, save_question
+from db.questions import (
+    get_recent_assistant_exchanges,
+    save_assistant_exchange,
+    save_question,
+)
 from db.user import DEFAULT_USER_ID
 from llm.ollama_client import cancel_pending_generations, decide_intervention_async
 from metacog.reflection import augment_evaluation_with_response_signals
@@ -117,7 +121,11 @@ async def reader_stream(ws: WebSocket, doc_id: int) -> None:
         "qa_question_type": None,  # type de la question Q&R courante (jauges type-aware)
         "qa_text": "",  # énoncé de la question Q&R courante (historique de session)
         "session_id": None,
-        "exchanges": [],  # historique [{question, answer}] (6 derniers)
+        # Historique [{question, answer}] (6 derniers), RÉHYDRATÉ depuis la base
+        # plus bas : ces échanges étaient déjà persistés et jamais relus, si bien
+        # que rouvrir un document repartait d'une mémoire vide et que reposer la
+        # même question sur la même page rendait la même réponse.
+        "exchanges": [],
         "recent_qtypes": [],  # types de questions Q&R récents (anti-répétition, 5 max)
         "gated": False,  # question automatique bloquante en cours (scroll verrouillé côté UI)
         "live_gauges": None,  # jauges métacognitives live (services.session.LiveGauges)
@@ -129,6 +137,14 @@ async def reader_stream(ws: WebSocket, doc_id: int) -> None:
         "pages_seen": 0,  # pages distinctes vues au dernier tick (progression)
     }
     state["live_gauges"] = await loop.run_in_executor(None, session.LiveGauges)
+    # Mémoire de conversation d'une session à l'autre. Best-effort : un document
+    # sans historique, ou une lecture qui échoue, laisse simplement la liste vide.
+    try:
+        state["exchanges"] = await loop.run_in_executor(
+            None, get_recent_assistant_exchanges, doc_id, 6,
+        )
+    except Exception:  # pragma: no cover - best-effort
+        logger.debug("Réhydratation de l'historique d'échanges ignorée", exc_info=True)
     # Dwell / visites / questions par page : mémoire de session partagée, qui
     # alimente aussi la politique d'intervention (services/intervention.py).
     memory = SessionMemory()

@@ -574,3 +574,159 @@ def test_quiz_finalize_goes_through_the_shared_metacog_finalisation(client, monk
     assert seen["metrics"]["questions_answered"] == 10
     assert seen["metrics"]["success_rate"] == 80
     assert seen["metrics"]["topic"] == "capitales"
+
+
+# ── Rotation du stock : ne pas resservir les mêmes questions ─────────────────
+#
+# Ces tests décrivent le défaut d'origine : sans sujet libre, le `LIMIT` SQL VALAIT
+# la longueur de session, donc `ORDER BY failed DESC, created_at DESC` choisissait
+# le quiz à lui seul — deux sessions d'affilée sur une même matière rendaient
+# exactement les mêmes questions, indéfiniment, et le stock ancien ne sortait jamais.
+
+def _seed_many(subject: str = "physique", n: int = 60) -> int:
+    """Un document + `n` questions de lecture jouables sur la même matière."""
+    from db.documents import upsert_document
+    from db.questions import save_question
+
+    doc_id = upsert_document(
+        path=f"/tmp/{subject}-stock.pdf",
+        filename=f"{subject}-stock.pdf",
+        page_count=n,
+        engine="test",
+        has_toc=False,
+        subject=subject,
+    )
+    for i in range(n):
+        save_question(
+            doc_id, "page", f"Page {i + 1}", i + 1, i + 1,
+            {
+                "question": f"Quelle est la notion {i + 1} en {subject} ?",
+                "question_type": "open",
+                "answer": f"Réponse {i + 1}",
+                "source_context": f"Le passage {i + 1} explique en détail la notion étudiée.",
+            },
+        )
+    return doc_id
+
+
+def _ids(client, **params) -> list[int]:
+    resp = client.get("/api/quiz/questions", params=params)
+    assert resp.status_code == 200
+    return [q["id"] for q in resp.json()]
+
+
+def test_two_sessions_in_a_row_do_not_repeat_the_same_questions(client):
+    """Deux quiz consécutifs sur la même matière : le recouvrement doit être faible."""
+    _seed_many("physique", 60)
+    first = _ids(client, subject="physique", n=10)
+    second = _ids(client, subject="physique", n=10)
+
+    assert len(first) == len(second) == 10
+    overlap = set(first) & set(second)
+    # Avant : overlap == 10 (les mêmes questions, dans le même ordre).
+    assert len(overlap) < 5, f"recouvrement trop fort : {sorted(overlap)}"
+
+
+def test_every_question_of_the_stock_can_surface(client):
+    """Aucune question n'est définitivement hors d'atteinte, même la plus ancienne."""
+    _seed_many("physique", 30)
+    seen: set[int] = set()
+    for _ in range(20):
+        seen.update(_ids(client, subject="physique", n=10))
+    # Avant : seules les 10 plus récentes sortaient, quel que soit le nombre de tours.
+    assert len(seen) == 30
+
+
+def test_a_failed_question_keeps_priority_despite_the_cooldown(client):
+    """La répétition espacée prime : une question ratée reste sur-représentée.
+
+    Comparaison APPARIÉE avec ses voisines du même tirage plutôt qu'à un seuil
+    absolu : le taux global dépend de l'amortissement, qui s'applique aussi à la
+    question ratée (chaque fois qu'elle sort, elle est réamortie). C'est ce
+    contrepoids qui borne le bonus — et c'est voulu : on veut la revoir souvent,
+    pas la revoir à chaque session.
+    """
+    from db import get_connection
+    from db.answers import save_answer
+    from db.user import DEFAULT_USER_ID
+
+    doc_id = _seed_many("physique", 40)
+    qid = get_connection().execute(
+        "SELECT id FROM questions WHERE document_id=? ORDER BY id LIMIT 1", (doc_id,),
+    ).fetchone()["id"]
+    save_answer(qid, DEFAULT_USER_ID, "à côté", verdict="incorrect")
+
+    rounds = 60
+    counts: dict[int, int] = {}
+    for _ in range(rounds):
+        for served in _ids(client, subject="physique", n=10):
+            counts[served] = counts.get(served, 0) + 1
+
+    failed_hits = counts.get(qid, 0)
+    others = [n for served, n in counts.items() if served != qid]
+    average_other = sum(others) / len(others)
+    assert failed_hits > average_other * 1.25, (
+        f"question ratée servie {failed_hits} fois contre {average_other:.1f} en moyenne"
+    )
+
+
+def test_quiz_serves_the_requested_length_despite_unusable_rows(client):
+    """Le filtre « inexploitable » ne doit plus manger la longueur de session.
+
+    Il s'applique APRÈS le `LIMIT` SQL : quand celui-ci valait la longueur
+    demandée, chaque ligne écartée raccourcissait le quiz d'autant.
+    """
+    from db.documents import upsert_document
+    from db.questions import save_question
+
+    doc_id = upsert_document(
+        path="/tmp/mixte.pdf", filename="mixte.pdf", page_count=40,
+        engine="test", has_toc=False, subject="chimie",
+    )
+    # 10 questions inexploitables (les plus récentes en base) puis 20 bonnes :
+    # l'ordre de chargement d'origine les aurait toutes servies en premier.
+    for i in range(20):
+        save_question(
+            doc_id, "page", f"Page {i + 1}", i + 1, i + 1,
+            {
+                "question": f"Quelle est la notion {i + 1} en chimie ?",
+                "question_type": "open",
+                "answer": f"Réponse {i + 1}",
+                "source_context": f"Le passage {i + 1} explique en détail la notion étudiée.",
+            },
+        )
+    for i in range(10):
+        save_question(
+            doc_id, "page", f"Page {i + 21}", i + 21, i + 21,
+            {"question": "?", "question_type": "open", "answer": "x", "source_context": ""},
+        )
+
+    assert len(_ids(client, subject="chimie", n=10)) == 10
+
+
+def test_interleaved_sessions_also_rotate(client):
+    """La pratique entrelacée tire dans le stock, elle ne rejoue pas la même tête."""
+    _seed_many("physique", 40)
+    _seed_many("histoire", 40)
+    first = _ids(client, interleaved=True, n=10)
+    second = _ids(client, interleaved=True, n=10)
+    assert len(set(first) & set(second)) < 6
+
+
+def test_the_candidate_pool_is_sampled_not_a_recency_window(client, monkeypatch):
+    """Au-delà de la taille du vivier, les questions anciennes restent atteignables.
+
+    Le plafond `QUIZ_SEARCH_POOL` chargeait « les N plus récentes » : passé ce
+    seuil, le vieux matériel devenait définitivement introuvable — le même défaut
+    que celui corrigé un cran plus haut, simplement déplacé dans le SQL.
+    """
+    import services.quiz as quiz_service
+
+    monkeypatch.setattr(quiz_service, "QUIZ_SEARCH_POOL", 20)
+    _seed_many("physique", 60)  # 3× le vivier
+
+    seen: set[int] = set()
+    for _ in range(40):
+        seen.update(_ids(client, subject="physique", n=5))
+    # Avant : au plus 20 questions distinctes, toujours les 20 plus récentes.
+    assert len(seen) > 35, f"seulement {len(seen)} questions atteignables sur 60"

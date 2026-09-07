@@ -144,13 +144,38 @@ def get_session_start_cards(
     n: int = 5,
     doc_id: int | None = None,
 ) -> list[dict]:
-    import math
-    import random
-    from datetime import datetime
+    """Cartes d'échauffement du sas d'entrée : les dues d'abord, puis un tirage pondéré.
 
+    Le tirage évite trois pièges, tous présents dans la version d'origine :
+
+    - un ``LIMIT 60`` sur ``created_at DESC`` rendait toute carte hors des 60 plus
+      récentes DÉFINITIVEMENT inatteignable en échauffement ;
+    - une demi-vie de récence de 7 jours éteignait le stock d'avant-hier, si bien
+      que l'échauffement ne montrait plus que les dernières cartes créées ;
+    - `random.choices` tirait AVEC remise, et chaque collision était réparée en
+      rebouchant dans l'ordre de récence — ce qui ramenait sournoisement le
+      tirage vers ce qu'il était censé éviter.
+
+    L'amortissement s'appuie sur ``last_reviewed``, que l'échauffement écrit
+    lui-même (le composant WarmUp appelle `/review` sur chaque carte montrée) :
+    le signal « déjà vue à la session précédente » existait déjà, il n'était pas lu.
+    """
+    from config.settings import (
+        FLASHCARD_POOL,
+        FLASHCARD_RECENCY_FLOOR,
+        FLASHCARD_RECENCY_HALF_LIFE_DAYS,
+        FLASHCARD_REVIEW_COOLDOWN_DAYS,
+        FLASHCARD_REVIEW_FLOOR,
+        FLASHCARD_SUBJECT_BONUS,
+    )
     from db.documents import get_document_subject
+    from services import selection
 
-    # Les cartes dues (répétition espacée) passent en priorité absolue.
+    # Les cartes dues (répétition espacée) passent en priorité absolue. `doc_id`
+    # n'est VOLONTAIREMENT pas transmis : une carte due l'est quel que soit le
+    # document ouvert, et la filtrer par document repousserait indéfiniment la
+    # révision d'une notion d'un autre cours. Le bonus de sujet plus bas suffit à
+    # orienter le reste de l'échauffement.
     due_cards = get_due_flashcards(user_id, limit=n)
     if len(due_cards) >= n:
         logger.info("Sas d'entrée : %d cartes dues sélectionnées", n)
@@ -168,8 +193,8 @@ def get_session_start_cards(
            LEFT JOIN chapters  ON chapters.id  = flashcards.chapter_id
            WHERE flashcards.user_id = ?
            ORDER BY flashcards.created_at DESC
-           LIMIT 60""",
-        (user_id,),
+           LIMIT ?""",
+        (user_id, FLASHCARD_POOL),
     ).fetchall()
 
     if not rows:
@@ -178,62 +203,48 @@ def get_session_start_cards(
 
     session_subject = get_document_subject(doc_id) if doc_id else None
     logger.info("Sas d'entrée : sujet session=%s, %d candidats", session_subject or "—", len(rows))
-    now = datetime.now()
-    HALF_LIFE_DAYS = 7.0
-    SUBJECT_BONUS = 2.0
 
-    scored: list[tuple[float, dict]] = []
+    cards: list[dict] = []
+    weights: list[float] = []
     for row in rows:
         card = _decode_flashcard(row)
         if card["id"] in due_ids:
             continue
-        try:
-            created = datetime.fromisoformat(card["created_at"])
-            age_days = max(0.0, (now - created).total_seconds() / 86400)
-        except (TypeError, ValueError, KeyError):
-            age_days = 30.0
-        recency = math.exp(-age_days * math.log(2) / HALF_LIFE_DAYS)
+        # Fraîcheur bornée : le matériel récent garde un avantage, sans écraser
+        # le reste du stock.
+        recency = max(
+            FLASHCARD_RECENCY_FLOOR,
+            selection.decay(
+                selection.age_days(card.get("created_at")),
+                FLASHCARD_RECENCY_HALF_LIFE_DAYS,
+            ),
+        )
         card_subject = card.get("document_subject") or ""
-        bonus = SUBJECT_BONUS if (session_subject and card_subject == session_subject) else 1.0
-        score = recency * bonus
+        bonus = (
+            FLASHCARD_SUBJECT_BONUS
+            if (session_subject and card_subject == session_subject)
+            else 1.0
+        )
+        seen = selection.cooldown(
+            card.get("last_reviewed"), FLASHCARD_REVIEW_COOLDOWN_DAYS, FLASHCARD_REVIEW_FLOOR,
+        )
+        weight = recency * bonus * seen
         logger.debug(
-            "  carte id=%s age=%.1fj sujet=%s recency=%.3f bonus=%.1f score=%.3f | %s",
-            card["id"], age_days, card_subject or "—", recency, bonus, score,
+            "  carte id=%s sujet=%s recency=%.3f bonus=%.1f vue=%.3f poids=%.3f | %s",
+            card["id"], card_subject or "—", recency, bonus, seen, weight,
             (card.get("front") or "")[:60],
         )
-        scored.append((score, card))
+        cards.append(card)
+        weights.append(weight)
 
-    weights = [s for s, _ in scored]
-    cards = [c for _, c in scored]
     if not cards:
         return due_cards
-    k = min(n - len(due_cards), len(cards))
-    selected = random.choices(population=cards, weights=weights, k=k)
-
-    seen_ids: set[int] = set()
-    result: list[dict] = []
-    for card in selected:
-        if card["id"] not in seen_ids:
-            seen_ids.add(card["id"])
-            result.append(card)
-    if len(result) < k:
-        for _, card in scored:
-            if card["id"] not in seen_ids and len(result) < k:
-                result.append(card)
-                seen_ids.add(card["id"])
-    score_by_id = {c["id"]: s for s, c in scored}
+    # Sans remise : plus de doublon à réparer, donc plus de rebouchage biaisé.
+    result = selection.weighted_sample(cards, weights, n - len(due_cards))
     for card in result:
-        card_id = card["id"]
-        score = score_by_id.get(card_id, 0.0)
-        try:
-            age_days = max(0.0, (now - datetime.fromisoformat(card["created_at"])).total_seconds() / 86400)
-        except (TypeError, ValueError, KeyError):
-            age_days = 0.0
-        card_subject = card.get("document_subject") or "—"
         logger.info(
-            "  → carte id=%s score=%.3f age=%.1fj sujet=%s | %s",
-            card_id, score, age_days, card_subject,
-            (card.get("front") or "")[:60],
+            "  → carte id=%s sujet=%s | %s",
+            card["id"], card.get("document_subject") or "—", (card.get("front") or "")[:60],
         )
     return due_cards + result
 

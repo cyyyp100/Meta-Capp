@@ -249,6 +249,24 @@ CREATE TABLE IF NOT EXISTS quiz_static_questions (
     difficulty   INTEGER DEFAULT 2
 );
 
+-- Ce qui a DÉJÀ ÉTÉ SERVI en quiz (schéma v28). Enregistré au moment où la
+-- question part vers le client, pas quand elle est répondue : une session
+-- abandonnée doit compter, sinon les mêmes questions reviennent au tour suivant.
+-- `question_id` est l'id de session : celui de `questions` pour une question de
+-- lecture, `STATIC_ID_OFFSET + id` pour le catalogue statique — ces dernières
+-- n'ont aucune ligne dans `questions`, ce qui interdit d'utiliser `answers`.
+-- Pas de clé étrangère pour cette raison ; une ligne orpheline est sans effet.
+CREATE TABLE IF NOT EXISTS quiz_exposures (
+    user_id        INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+    question_id    INTEGER NOT NULL,
+    source         TEXT NOT NULL DEFAULT 'reading',
+    times_served   INTEGER NOT NULL DEFAULT 0,
+    last_served_at DATETIME,
+    PRIMARY KEY (user_id, question_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_quiz_exposures_user ON quiz_exposures(user_id, last_served_at);
+
 CREATE TABLE IF NOT EXISTS subject_profile (
     user_id         INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
     subject         TEXT NOT NULL,

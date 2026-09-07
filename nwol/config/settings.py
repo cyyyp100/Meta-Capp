@@ -349,7 +349,7 @@ if not getattr(sys, "frozen", False):
     if _db_override:
         DB_PATH = str(Path(_db_override).expanduser().resolve())
 
-DB_SCHEMA_VERSION = 27
+DB_SCHEMA_VERSION = 28
 
 # Logs
 LOG_MAX_BYTES = 1_000_000
@@ -410,3 +410,49 @@ QUIZ_LENGTH_CHOICES = (5, 10, 15, 20, 30)
 # lot borné et on filtre EN PYTHON (utils.text.fold).
 QUIZ_SEARCH_POOL = 400
 QUIZ_SEARCH_MAX_TERMS = 6
+
+# ── Sélection : ne pas resservir toujours les mêmes lignes ───────────────────
+# Lues par `services/selection.py` et ses appelants (quiz, sas d'entrée,
+# brainstorming). Toutes suivent la même règle : AMORTIR une ligne récemment
+# servie, jamais l'EXCLURE — sinon une notion ratée ne pourrait plus revenir vite.
+#
+# Quiz : une question servie retombe à QUIZ_EXPOSURE_FLOOR de son poids, et
+# remonte vers 1.0 en QUIZ_EXPOSURE_HALF_LIFE_DAYS. C'est ce qui fait que deux
+# sessions d'affilée sur la même matière ne donnent pas la même liste.
+QUIZ_EXPOSURE_HALF_LIFE_DAYS = 3.0
+QUIZ_EXPOSURE_FLOOR = 0.15
+# Une question déjà ratée reste prioritaire MALGRÉ l'amortissement : le bonus est
+# choisi assez grand pour dominer un cooldown frais (2.0 > 1/0.15 n'est pas requis,
+# mais 2.0 suffit à la faire ressortir face à ses voisines non ratées).
+QUIZ_FAILED_BONUS = 2.0
+# Fraîcheur du matériel : le cours de la semaine garde un avantage, mais borné —
+# sans plancher, le neuf écrase l'ancien et le stock ne tourne jamais.
+QUIZ_FRESHNESS_HALF_LIFE_DAYS = 30.0
+QUIZ_FRESHNESS_FLOOR = 0.5
+
+# Sas d'entrée : vivier chargé avant pondération (remplace un `LIMIT 60` qui
+# rendait toute carte hors des 60 plus récentes définitivement inatteignable).
+FLASHCARD_POOL = 400
+FLASHCARD_RECENCY_HALF_LIFE_DAYS = 30.0
+FLASHCARD_RECENCY_FLOOR = 0.35
+FLASHCARD_SUBJECT_BONUS = 2.0
+# `last_reviewed` est déjà écrit par l'échauffement lui-même (WarmUp appelle
+# /review) : c'est le signal « vue à la session précédente », jusqu'ici ignoré.
+FLASHCARD_REVIEW_COOLDOWN_DAYS = 5.0
+FLASHCARD_REVIEW_FLOOR = 0.2
+
+# Brainstorming : plafond d'extraits par type de source (surlignage, flashcard,
+# Q&R, document) et amortissement d'une source DÉJÀ CITÉE dans la discussion.
+BRAINSTORM_PER_TYPE_CAP = 2
+BRAINSTORM_CITED_FLOOR = 0.2
+# Poids d'un terme DISTINCT retrouvé, en base d'exponentielle : un extrait qui
+# touche deux mots de la requête pèse 9 contre 3. Il faut une pente franche —
+# additive, la pertinence était noyée dès que quelques dizaines de lignes
+# matchaient, et seul le hasard départageait.
+BRAINSTORM_RELEVANCE_BASE = 3.0
+BRAINSTORM_RECENCY_HALF_LIFE_DAYS = 45.0
+BRAINSTORM_RECENCY_FLOOR = 0.4
+
+# Assistant lecteur : cartes liées proposées au prompt, tirées dans un vivier
+# plus large que les 3 finalement citées (sinon toujours les 3 mêmes).
+ASSISTANT_FLASHCARD_POOL = 40

@@ -523,3 +523,70 @@ def test_open_types_keep_the_llm_verdict(client, monkeypatch):
         evaluator=lambda ctx, ok, err: ok({"verdict": "partial", "feedback": "…", "completion": "précise"}),
     )
     assert out["verdict"] == "partial" and out["completion"] == "précise"
+
+
+def test_assistant_exchanges_are_rehydrated_from_the_db(client, monkeypatch):
+    """Rouvrir un document retrouve la conversation précédente.
+
+    Les échanges libres étaient déjà persistés par `save_assistant_exchange` et
+    n'étaient JAMAIS relus : l'historique ne vivait que dans l'état du WebSocket.
+    Reposer la même question sur la même page reconstruisait donc un prompt
+    identique — donc, à température 0.1, la même réponse.
+    """
+    from db.documents import upsert_document
+    from db.questions import save_assistant_exchange
+    from services import assistant
+
+    doc_id = upsert_document(
+        path="/tmp/histoire.pdf", filename="histoire.pdf", page_count=10,
+        engine="test", has_toc=False, subject="histoire",
+    )
+    save_assistant_exchange(doc_id, 2, "Qui était Vercingétorix ?", "Un chef gaulois.")
+    save_assistant_exchange(doc_id, 3, "Et Alésia ?", "Le siège de -52.")
+
+    seen: dict = {}
+
+    def fake_answer(d, p, q, on_success, on_error, **kw):
+        seen["recent_exchanges"] = kw.get("recent_exchanges")
+        on_success({"answer": "ok", "highlights": []})
+
+    monkeypatch.setattr(assistant, "answer_question", fake_answer)
+
+    with client.websocket_connect(f"/api/reader/{doc_id}/stream") as ws:
+        ws.send_json({"type": "ask", "question": "Encore ?", "page": 4})
+        assert ws.receive_json()["type"] == "loading"
+        assert ws.receive_json()["type"] == "answer"
+
+    exchanges = seen["recent_exchanges"]
+    # Ordre chronologique, le plus ancien d'abord.
+    assert [e["question"] for e in exchanges] == [
+        "Qui était Vercingétorix ?", "Et Alésia ?",
+    ]
+    assert exchanges[0]["answer"] == "Un chef gaulois."
+
+
+def test_rehydration_is_scoped_to_the_document_and_bounded(client, monkeypatch):
+    """Un autre document n'apporte pas sa conversation, et la fenêtre reste bornée."""
+    from db.documents import upsert_document
+    from db.questions import get_recent_assistant_exchanges, save_assistant_exchange
+
+    doc_a = upsert_document(
+        path="/tmp/a.pdf", filename="a.pdf", page_count=5,
+        engine="test", has_toc=False, subject="a",
+    )
+    doc_b = upsert_document(
+        path="/tmp/b.pdf", filename="b.pdf", page_count=5,
+        engine="test", has_toc=False, subject="b",
+    )
+    for i in range(10):
+        save_assistant_exchange(doc_a, 1, f"question A{i}", f"réponse A{i}")
+    save_assistant_exchange(doc_b, 1, "question B", "réponse B")
+
+    recent = get_recent_assistant_exchanges(doc_a, limit=6)
+    assert len(recent) == 6
+    assert [e["question"] for e in recent] == [f"question A{i}" for i in range(4, 10)]
+    assert get_recent_assistant_exchanges(doc_b, limit=6) == [
+        {"question": "question B", "answer": "réponse B"},
+    ]
+    # Un document sans historique reste silencieux (pas d'erreur).
+    assert get_recent_assistant_exchanges(9999) == []

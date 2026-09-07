@@ -477,134 +477,6 @@ def seed_static_questions() -> None:
     logger.info("Questions statiques seedées (%d ajoutées)", len(missing))
 
 
-def get_quiz_questions(user_id: int = 1, n: int = 10, subject: str | None = None) -> list[dict]:
-    """Retourne n questions pour le quizz : d'abord les questions de lecture (non-correct),
-    complétées par des questions statiques si nécessaire.
-    Si subject est fourni, filtre uniquement les questions de cette matière."""
-    conn = get_connection()
-    results: list[dict] = []
-
-    # 1. Questions issues des lectures où l'utilisateur a eu des difficultés
-    if subject:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT q.id, q.question, q.choices_json, q.answer, q.question_type,
-                   q.source_context, q.scope_label, q.page_start, q.page_end,
-                   COALESCE(d.filename, '') AS document_title,
-                   COALESCE(d.subject, '') AS subject,
-                   COALESCE(c.title, '') AS chapter_title
-            FROM questions q
-            LEFT JOIN documents d ON d.id = q.document_id
-            LEFT JOIN chapters c ON c.id = q.chapter_id
-            JOIN answers a ON a.question_id = q.id AND a.user_id = ?
-            WHERE a.verdict IN ('incorrect', 'partial')
-              AND LOWER(COALESCE(d.subject, '')) = LOWER(?)
-            ORDER BY a.answered_at DESC
-            LIMIT ?
-            """,
-            (user_id, subject, n),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT q.id, q.question, q.choices_json, q.answer, q.question_type,
-                   q.source_context, q.scope_label, q.page_start, q.page_end,
-                   COALESCE(d.filename, '') AS document_title,
-                   COALESCE(d.subject, '') AS subject,
-                   COALESCE(c.title, '') AS chapter_title
-            FROM questions q
-            LEFT JOIN documents d ON d.id = q.document_id
-            LEFT JOIN chapters c ON c.id = q.chapter_id
-            JOIN answers a ON a.question_id = q.id AND a.user_id = ?
-            WHERE a.verdict IN ('incorrect', 'partial')
-            ORDER BY a.answered_at DESC
-            LIMIT ?
-            """,
-            (user_id, n),
-        ).fetchall()
-
-    seen_ids: set[int] = set()
-    for row in rows:
-        (
-            qid, question, choices_json, answer, qtype, source_context,
-            scope_label, page_start, page_end, document_title, row_subject,
-            chapter_title,
-        ) = row
-        if qid in seen_ids:
-            continue
-        seen_ids.add(qid)
-        if _is_unusable_for_quiz(question, source_context):
-            continue
-        choices = None
-        if choices_json:
-            try:
-                choices = json.loads(choices_json)
-            except Exception:
-                choices = None
-        course_context = _course_context_text(
-            document_title=document_title,
-            chapter_title=chapter_title,
-            scope_label=scope_label,
-            page_start=page_start,
-            page_end=page_end,
-            source_context=source_context,
-        )
-        results.append({
-            "id": qid,
-            "question": question,
-            "choices": choices,
-            "answer": answer,
-            "question_type": qtype,
-            "category": row_subject or "culture",
-            "document": document_title or None,
-            "chapter_title": chapter_title or None,
-            "source_context": source_context or "",
-            "course_context": course_context,
-            "source": "reading",
-        })
-
-    # 2. Compléter avec des questions statiques
-    if len(results) < n:
-        needed = n - len(results)
-        if subject:
-            static_rows = conn.execute(
-                """SELECT id, question, choices_json, answer, category
-                   FROM quiz_static_questions
-                   WHERE LOWER(category) = LOWER(?)
-                   ORDER BY RANDOM()
-                   LIMIT ?""",
-                (subject, needed),
-            ).fetchall()
-        else:
-            static_rows = conn.execute(
-                """SELECT id, question, choices_json, answer, category
-                   FROM quiz_static_questions
-                   ORDER BY RANDOM()
-                   LIMIT ?""",
-                (needed,),
-            ).fetchall()
-        for row in static_rows:
-            qid, question, choices_json, answer, category = row
-            choices = None
-            if choices_json:
-                try:
-                    choices = json.loads(choices_json)
-                except Exception:
-                    choices = None
-            results.append({
-                "id": qid,
-                "question": question,
-                "choices": choices,
-                "answer": answer,
-                "category": category or "culture",
-                "source": "static",
-            })
-
-    results = [
-        q for q in results
-        if not _is_unusable_for_quiz(q.get("question", ""), q.get("source_context"))
-    ]
-    return results[:n]
 
 
 def _course_context_text(
@@ -684,17 +556,26 @@ def get_quiz_base_questions(
 ) -> list[dict]:
     """Questions de lecture (``scope_type='page'``) pour une session de quiz.
 
-    Contrairement à :func:`get_quiz_questions`, on prend **toutes** les questions
-    générées pendant les lectures (pas seulement celles ratées) et **sans**
-    complément de questions statiques : la longueur suit le stock réel par thème
-    (borné par ``n``). Les types survivent au passage — le quiz les rejoue tels
-    quels (cf. `services.quiz.build_quiz`), et pas uniquement en QCM. On priorise les questions déjà ratées puis les plus
-    récentes. ``document_id`` est exposé pour permettre le deep-link vers le reader.
+    On prend **toutes** les questions générées pendant les lectures (pas seulement
+    celles ratées) et **sans** complément de questions statiques : la longueur suit
+    le stock réel par thème (borné par ``n``). Les types survivent au passage — le
+    quiz les rejoue tels quels (cf. `services.quiz.build_quiz`), et pas uniquement
+    en QCM. ``document_id`` est exposé pour permettre le deep-link vers le reader.
 
-    ``shuffle`` échange cette priorité contre un tirage aléatoire. C'est ce que
-    demande la pratique entrelacée : « ratées d'abord, puis les plus récentes »
-    concentre la session sur le dernier document lu, donc sur un seul domaine —
-    exactement ce que l'alternance cherche à éviter.
+    **Cette fonction ne choisit pas la session : elle fournit un VIVIER.** L'ordre
+    « ratées d'abord, puis les plus récentes » n'est qu'un ordre de chargement
+    stable ; le tri qui compte (amortissement des questions déjà servies, bonus
+    des ratées, fraîcheur bornée) est appliqué par `services.quiz._pick` sur le
+    vivier entier. Laisser ce ``LIMIT`` trancher la session — ce qu'il faisait
+    quand l'appelant passait ``n = count`` — rendait indéfiniment les mêmes
+    questions à chaque session sur une même matière.
+
+    Les colonnes de sélection ``created_at`` et ``failed`` remontent avec chaque
+    ligne pour que ce calcul soit possible sans seconde requête.
+
+    ``shuffle`` échange l'ordre de chargement contre un tirage aléatoire, pour que
+    la pratique entrelacée voie un vivier qui ne soit pas concentré sur le dernier
+    document lu.
     """
     conn = get_connection()
     params: list = [user_id]
@@ -711,12 +592,20 @@ def get_quiz_base_questions(
         where_type = f"AND COALESCE(q.question_type, '') NOT IN ({placeholders})"
         params.extend(excluded)
     params.append(n)
-    order_by = "RANDOM()" if shuffle else "failed DESC, q.created_at DESC"
+    # Le vivier est ÉCHANTILLONNÉ, jamais pris par le haut. `ORDER BY created_at DESC`
+    # en faisait une fenêtre de récence : passé `n` questions sur une matière, les
+    # plus anciennes ne pouvaient plus JAMAIS entrer dans un quiz, quel que soit le
+    # nombre de sessions. Un tirage SQL uniforme les rend toutes atteignables ; la
+    # préférence pour le matériel récent est réintroduite — bornée — par le facteur
+    # de fraîcheur de `services.quiz._weights`, qui lui n'exclut rien.
+    # `failed DESC` reste en tête : les questions ratées forment un petit ensemble
+    # qu'on veut voir entrer dans le vivier à coup sûr.
+    order_by = "RANDOM()" if shuffle else "failed DESC, RANDOM()"
     rows = conn.execute(
         f"""
         SELECT q.id, q.question, q.choices_json, q.answer, q.question_type,
                q.source_context, q.scope_label, q.page_start, q.page_end,
-               q.document_id,
+               q.document_id, q.created_at,
                COALESCE(d.filename, '')     AS document_title,
                COALESCE(d.subject, '')      AS subject,
                COALESCE(d.auto_summary, '') AS doc_summary,
@@ -742,8 +631,8 @@ def get_quiz_base_questions(
     for row in rows:
         (
             qid, question, choices_json, answer, qtype, source_context,
-            scope_label, page_start, page_end, document_id, document_title,
-            row_subject, doc_summary, doc_keywords, chapter_title, _failed,
+            scope_label, page_start, page_end, document_id, created_at, document_title,
+            row_subject, doc_summary, doc_keywords, chapter_title, failed,
         ) = row
         if _is_unusable_for_quiz(question, source_context):
             continue
@@ -777,6 +666,10 @@ def get_quiz_base_questions(
                 document_title, row_subject, chapter_title, scope_label,
                 doc_summary, doc_keywords,
             ),
+            # Champs internes de sélection (`services.quiz` les pondère, puis
+            # `_assemble_quiz` les laisse tomber : ils ne partent pas au client).
+            "created_at": created_at,
+            "failed": bool(failed),
             "source": "reading",
         })
     return results

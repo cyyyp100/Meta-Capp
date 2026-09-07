@@ -1,7 +1,7 @@
 -- Schéma de référence de Meta-Capp — GÉNÉRÉ, ne pas éditer à la main.
 --
 -- Forme réelle d'une base neuve après application des migrations
--- (config.settings.DB_SCHEMA_VERSION = 27).
+-- (config.settings.DB_SCHEMA_VERSION = 28).
 -- Régénérer avec :  python scripts/dump_schema.py
 --
 -- Tables créées par une migration mais sans code lecteur ni écrivain
@@ -323,6 +323,15 @@ CREATE TABLE questions (
 CREATE INDEX idx_questions_doc ON questions(document_id);
 CREATE INDEX idx_questions_scope ON questions(scope_type);
 CREATE INDEX idx_questions_session ON questions(session_id);
+CREATE TABLE quiz_exposures (
+    user_id        INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+    question_id    INTEGER NOT NULL,
+    source         TEXT NOT NULL DEFAULT 'reading',
+    times_served   INTEGER NOT NULL DEFAULT 0,
+    last_served_at DATETIME,
+    PRIMARY KEY (user_id, question_id)
+);
+CREATE INDEX idx_quiz_exposures_user ON quiz_exposures(user_id, last_served_at);
 CREATE TABLE quiz_static_questions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     question     TEXT NOT NULL,

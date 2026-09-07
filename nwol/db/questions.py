@@ -100,6 +100,31 @@ def save_assistant_exchange(
     )
 
 
+def get_recent_assistant_exchanges(doc_id: int, limit: int = 6) -> list[dict]:
+    """Derniers échanges libres avec l'assistant sur un document → ``[{question, answer}]``.
+
+    Symétrique de :func:`save_assistant_exchange`, qui les écrivait sans que
+    personne ne les relise jamais : l'historique de conversation ne vivait que
+    dans l'état du WebSocket et mourait avec lui. Rouvrir un document repartait
+    donc d'une mémoire vide, et reposer la même question sur la même page
+    reconstruisait un prompt identique — donc, à basse température, la même
+    réponse. Ordre chronologique (le plus ancien d'abord), comme l'attend
+    `services.assistant.build_answer_context`.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT question, answer FROM questions
+           WHERE document_id=? AND scope_type IN ('assistant_follow_up', 'qa_follow_up')
+             AND TRIM(COALESCE(answer, '')) <> ''
+           ORDER BY id DESC LIMIT ?""",
+        (doc_id, int(limit)),
+    ).fetchall()
+    return [
+        {"question": row["question"] or "", "answer": row["answer"] or ""}
+        for row in reversed(rows)
+    ]
+
+
 def count_assistant_questions(session_id: int) -> int:
     conn = get_connection()
     row = conn.execute(

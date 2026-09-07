@@ -92,18 +92,25 @@ def handle_message(
             on_scanning(True)
         sources: list[dict] = []
         try:
+            # Extraits DÉJÀ CITÉS dans cette discussion : amortis, pas exclus. Sans
+            # cela, la même poignée de surlignages revenait tour après tour, et
+            # deux fois la même question rendait la même réponse aux mêmes sources.
+            already_cited = _cited_keys(discussion_id)
             seen: set = set()
             for q in queries:
-                for item in brainstorm_search.search_user_db(q):
-                    key = (item.get("source_type"), item.get("snippet"))
+                remaining = MAX_SOURCES - len(sources)
+                if remaining <= 0:
+                    break
+                for item in brainstorm_search.search_user_db(
+                    q, limit=remaining, damp_keys=already_cited | seen,
+                ):
+                    key = brainstorm_search.source_key(item)
                     if key in seen:
                         continue
                     seen.add(key)
                     sources.append(item)
                     if len(sources) >= MAX_SOURCES:
                         break
-                if len(sources) >= MAX_SOURCES:
-                    break
         except Exception as exc:  # pragma: no cover - best-effort
             logger.debug("Recherche base échouée : %s", exc)
         finally:
@@ -117,6 +124,25 @@ def handle_message(
         _answer([])
 
     decide_brainstorm_search_async(history, user_message, _on_decision, _on_decide_error)
+
+
+def _cited_keys(discussion_id: int) -> set:
+    """Clés des extraits déjà cités dans la discussion (cf. `brainstorm_search.source_key`).
+
+    Les sources sont archivées avec chaque message assistant (`sources_json`), il
+    n'y a donc rien de nouveau à persister : elles n'étaient simplement jamais
+    relues. Best-effort — une recherche sans amortissement vaut mieux qu'une
+    réponse en erreur.
+    """
+    try:
+        return {
+            brainstorm_search.source_key(src)
+            for message in store.get_messages(discussion_id)
+            for src in (message.get("sources") or [])
+        }
+    except Exception:  # pragma: no cover - best-effort
+        logger.debug("Relecture des sources déjà citées ignorée", exc_info=True)
+        return set()
 
 
 def _maybe_summarize(discussion_id: int) -> None:

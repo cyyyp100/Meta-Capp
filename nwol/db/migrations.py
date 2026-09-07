@@ -145,6 +145,11 @@ def run_migrations(conn) -> None:
         _set_version(conn, 27)
         current = 27
 
+    if current < 28 <= TARGET_SCHEMA_VERSION:
+        _migrate_to_v28(conn)
+        _set_version(conn, 28)
+        current = 28
+
     if current < TARGET_SCHEMA_VERSION:
         _set_version(conn, TARGET_SCHEMA_VERSION)
 
@@ -889,3 +894,34 @@ def _migrate_to_v27(conn) -> None:
         "WHERE longest_streak IS NULL OR longest_streak < streak"
     )
     logger.info("Migration SQLite v27 terminée")
+
+
+def _migrate_to_v28(conn) -> None:
+    """Mémoire des questions DÉJÀ SERVIES en quiz (`quiz_exposures`).
+
+    Sans elle, la sélection n'avait aucun moyen de savoir ce qu'elle venait de
+    poser : deux sessions d'affilée sur la même matière rendaient exactement les
+    mêmes questions, indéfiniment. `answers` ne pouvait pas jouer ce rôle —
+    `/api/quiz/answer` ne transporte aucun `question_id`, et les questions du
+    catalogue statique n'ont pas de ligne dans `questions`.
+
+    Table neuve : rien à reprendre d'une base existante. L'absence de ligne vaut
+    « jamais servie », c'est-à-dire aucun amortissement (`services/selection.cooldown`).
+    """
+    logger.info("Migration SQLite v28 démarrée")
+    with conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS quiz_exposures (
+                   user_id        INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+                   question_id    INTEGER NOT NULL,
+                   source         TEXT NOT NULL DEFAULT 'reading',
+                   times_served   INTEGER NOT NULL DEFAULT 0,
+                   last_served_at DATETIME,
+                   PRIMARY KEY (user_id, question_id)
+               )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_quiz_exposures_user "
+            "ON quiz_exposures(user_id, last_served_at)"
+        )
+    logger.info("Migration SQLite v28 terminée")

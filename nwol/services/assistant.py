@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import Callable
 
-from config.settings import FORCE_QUESTION_TYPE
+from config.settings import ASSISTANT_FLASHCARD_POOL, FORCE_QUESTION_TYPE
 from db.answers import get_recurring_struggles
 from db.chapters import get_chapters
 from db.documents import get_document as _get_document
@@ -25,7 +25,7 @@ from llm.ollama_client import (
     generate_rephrasing_async,
     make_standalone_flashcard_async,
 )
-from services import library, pdf_rag
+from services import library, pdf_rag, selection
 
 __all__ = [
     "build_answer_context",
@@ -86,6 +86,28 @@ def _served_as_text_blocks(doc_id: int, page: int) -> bool:
     return bool(blocks)
 
 
+_RELATED_FLASHCARDS = 3
+
+
+def _varied_related_flashcards(doc_id: int, limit: int = _RELATED_FLASHCARDS) -> list[dict]:
+    """Cartes liées au document, tirées dans un vivier plus large que ce qu'on cite.
+
+    `get_related_flashcards` classe par « chapitre d'abord, puis les plus
+    récentes » : sur un cours bien fourni, ce sont éternellement les trois mêmes
+    cartes qui accompagnent chaque réponse. On charge donc un vivier et on y tire
+    les trois citées, en gardant l'avantage aux plus récentes sans le rendre
+    définitif.
+    """
+    pool = get_related_flashcards(doc_id=doc_id, limit=ASSISTANT_FLASHCARD_POOL)
+    if len(pool) <= limit:
+        return pool
+    weights = [
+        max(0.25, selection.decay(selection.age_days(card.get("created_at")), 30.0))
+        for card in pool
+    ]
+    return selection.weighted_sample(pool, weights, limit)
+
+
 def chapter_title_for_page(doc_id: int, page: int) -> str:
     """Titre du chapitre couvrant `page` (dernier chapitre commençant avant)."""
     best = ""
@@ -116,7 +138,7 @@ def build_answer_context(
         "page_number": page,
         "metacog_profile": _safe(ensure_profile, {}),
         "session_gauges": session_gauges or {},
-        "related_flashcards": _safe(lambda: get_related_flashcards(doc_id=doc_id), []),
+        "related_flashcards": _safe(lambda: _varied_related_flashcards(doc_id), []),
         "recent_exchanges": list(recent_exchanges or []),
         "selected_snippets": list(selected_snippets or []),
         "user_highlights": _safe(lambda: get_highlight_quotes(doc_id, page=page), []),

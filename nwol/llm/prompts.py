@@ -3187,7 +3187,9 @@ def build_brainstorm_answer_prompt(
 {_t("Réponds en texte clair (markdown léger autorisé), en français, comme dans une conversation.", "Reply in clear text (light markdown allowed), conversationally.")}
 {_t("Consignes", "Guidelines")} :
 - {_t("Quand un extrait ci-dessus est pertinent, mentionne-le NATURELLEMENT : « on en a déjà croisé l'idée dans <document> » ou « tu avais surligné ce passage : … ». Ne cite JAMAIS un extrait absent de la liste.", "When an excerpt above is relevant, mention it NATURALLY: 'we already touched on this in <document>' or 'you highlighted this passage: …'. NEVER cite an excerpt that is not in the list.")}
+- {_t("Ne cite pas tous les extraits : garde ceux qui servent vraiment ton propos. Deux bien exploités valent mieux que six énumérés.", "Do not cite every excerpt: keep the ones that actually serve your point. Two well used beat six listed.")}
 - {_t("Si la base n'apporte rien, réponds normalement avec tes connaissances, sans le signaler.", "If the database adds nothing, just answer normally from your knowledge, without pointing it out.")}
+- {_t("Si la discussion a déjà abordé le sujet, prends un ANGLE NEUF plutôt que de redire ce qui a été dit : creuse, nuance, ou déplace la question.", "If the discussion already covered the topic, take a NEW ANGLE instead of restating what was said: dig deeper, qualify it, or shift the question.")}
 - {_t("Sois un vrai partenaire de réflexion : propose des angles, des questions, des pistes, pas seulement un résumé.", "Be a real thinking partner: offer angles, questions, leads — not just a summary.")}
 - {_t("Reste concis et vivant ; structure si utile, mais évite les pavés.", "Stay concise and lively; structure when useful, but avoid walls of text.")}"""
 

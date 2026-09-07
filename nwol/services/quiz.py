@@ -8,12 +8,18 @@ import random
 from config import question_types
 from config.settings import (
     QUIZ_DEFAULT_QUESTIONS,
+    QUIZ_EXPOSURE_FLOOR,
+    QUIZ_EXPOSURE_HALF_LIFE_DAYS,
+    QUIZ_FAILED_BONUS,
+    QUIZ_FRESHNESS_FLOOR,
+    QUIZ_FRESHNESS_HALF_LIFE_DAYS,
     QUIZ_MAX_QUESTIONS,
     QUIZ_MIN_QUESTIONS,
     QUIZ_SEARCH_MAX_TERMS,
     QUIZ_SEARCH_POOL,
 )
 from db.questions import get_question
+from db.quiz_exposures import get_exposures, record_exposures
 from db.quiz_questions import (
     STATIC_ID_OFFSET,
     get_quiz_base_questions,
@@ -22,6 +28,7 @@ from db.quiz_questions import (
 )
 from db.subjects import get_all_subjects, update_subject_from_answer
 from db.user import DEFAULT_USER_ID
+from services import selection
 from llm.ollama_client import (
     evaluate_answer_async,
     generate_quiz_distractors_async,
@@ -89,35 +96,58 @@ def build_quiz(
     Les questions de lecture passent d'abord ; le catalogue statique complète
     jusqu'à ``n`` — sinon une base neuve, ou un thème sans document importé,
     n'aurait aucun quiz à jouer.
+
+    **Dans tous les modes, on charge un VIVIER (`QUIZ_SEARCH_POOL`) puis on tire
+    dedans** (:func:`_pick`). Prendre la tête d'une liste bornée par ``count``
+    revenait à laisser le ``ORDER BY`` SQL choisir la session : deux quiz d'affilée
+    sur la même matière rendaient exactement les mêmes questions, et le stock
+    ancien n'était jamais rejoué. Les questions servies sont mémorisées
+    (`db.quiz_exposures`) pour amortir leur retour au tour suivant.
     """
     count = clamp_quiz_length(n)
     if interleaved:
-        # Même raison qu'un sujet libre : l'alternance se décide EN PYTHON, donc on
-        # charge un lot borné (`QUIZ_SEARCH_POOL`) au lieu de laisser le LIMIT SQL
-        # trancher avant. Le catalogue statique entre dans le vivier — il couvre à
-        # lui seul plusieurs domaines, ce qui rend l'alternance possible même quand
-        # un seul document a été importé.
-        return _assemble_quiz(_interleave_by_category(
-            get_quiz_base_questions(user_id, QUIZ_SEARCH_POOL, None, shuffle=True)
-            + get_static_quiz_questions(QUIZ_SEARCH_POOL),
-            count,
-        ))
+        # L'alternance se décide EN PYTHON, donc on charge un lot borné au lieu de
+        # laisser le LIMIT SQL trancher avant. Le catalogue statique entre dans le
+        # vivier — il couvre à lui seul plusieurs domaines, ce qui rend l'alternance
+        # possible même quand un seul document a été importé.
+        # Le tirage pondéré passe AVANT la répartition par domaine (sinon la même
+        # tête de paquet ouvre toutes les sessions entrelacées) et sépare lecture
+        # et catalogue : `_interleave_by_category` conserve l'ordre reçu à
+        # l'intérieur d'un domaine, ce qui fait passer le matériel de l'apprenant
+        # devant le catalogue de secours.
+        pool = _weighted_order(
+            get_quiz_base_questions(user_id, QUIZ_SEARCH_POOL, None, shuffle=True), [], user_id,
+        ) + _weighted_order(get_static_quiz_questions(QUIZ_SEARCH_POOL), [], user_id)
+        return _served(_assemble_quiz(_interleave_by_category(pool, count)), user_id)
 
     terms = _topic_terms(topic)
-    # Avec un sujet libre, le filtrage se fait EN PYTHON (accents pliés) : on charge
-    # un lot borné au lieu de laisser le LIMIT SQL trancher avant le filtre.
-    pool = QUIZ_SEARCH_POOL if terms else count
-
-    base = _rank_by_topic(get_quiz_base_questions(user_id, pool, subject), terms)[:count]
+    base = _pick(
+        _rank_by_topic(get_quiz_base_questions(user_id, QUIZ_SEARCH_POOL, subject), terms),
+        terms, count, user_id,
+    )
     if len(base) < count:
         missing = count - len(base)
-        static = _rank_by_topic(
-            get_static_quiz_questions(pool if terms else missing, subject), terms,
-        )
-        base.extend(static[:missing])
+        base.extend(_pick(
+            _rank_by_topic(get_static_quiz_questions(QUIZ_SEARCH_POOL, subject), terms),
+            terms, missing, user_id,
+        ))
     if not base:
         return []
-    return _assemble_quiz(base)
+    return _served(_assemble_quiz(base), user_id)
+
+
+def _served(quiz: list[dict], user_id: int) -> list[dict]:
+    """Marque la session comme servie, puis la renvoie telle quelle.
+
+    Enregistré ICI, au départ vers le client, et non à la correction : une session
+    abandonnée à la troisième question doit quand même faire tourner le stock au
+    tour suivant. Best-effort — un quiz jouable prime sur son historique.
+    """
+    try:
+        record_exposures(user_id, [(q["id"], q.get("source") or "reading") for q in quiz])
+    except Exception:  # pragma: no cover - best-effort
+        logger.debug("Enregistrement de l'exposition du quiz ignoré", exc_info=True)
+    return quiz
 
 
 def _assemble_quiz(base: list[dict]) -> list[dict]:
@@ -435,6 +465,69 @@ def _topic_terms(topic: str | None) -> list[str]:
     return [folded] if len(folded) >= 2 else []
 
 
+def _weights(items: list[dict], terms: list[str], user_id: int) -> list[float]:
+    """Poids de tirage d'un vivier de questions. Quatre facteurs multiplicatifs.
+
+    - **pertinence** ``1 + termes distincts trouvés`` : avec un sujet libre, une
+      question qui touche trois mots de la requête pèse le double d'une qui n'en
+      touche qu'un. Sans sujet, facteur neutre.
+    - **échec** ``QUIZ_FAILED_BONUS`` si la question a déjà été ratée en lecture :
+      la répétition espacée garde la priorité, MALGRÉ l'amortissement ci-dessous.
+    - **amortissement** : une question servie récemment retombe à
+      ``QUIZ_EXPOSURE_FLOOR`` et remonte en ``QUIZ_EXPOSURE_HALF_LIFE_DAYS``.
+      C'est ce qui différencie deux sessions d'affilée. Jamais nul : rien n'est
+      définitivement verrouillé.
+    - **fraîcheur** : le cours de la semaine garde un avantage, borné par
+      ``QUIZ_FRESHNESS_FLOOR``. Sans ce plancher, le matériel neuf écrase l'ancien
+      et le stock ne tourne jamais — le défaut d'origine, en plus doux.
+    """
+    ids = [q.get("id") for q in items]
+    try:
+        exposures = get_exposures(user_id, ids)
+    except Exception:  # pragma: no cover - une table absente ne casse pas un quiz
+        logger.debug("Lecture des expositions de quiz ignorée", exc_info=True)
+        exposures = {}
+
+    weights: list[float] = []
+    for q in items:
+        weight = 1.0 + float(q.get("_topic_hits") or 0)
+        if q.get("failed"):
+            weight *= QUIZ_FAILED_BONUS
+        seen = exposures.get(q.get("id"))
+        weight *= selection.cooldown(
+            seen.get("last_served_at") if seen else None,
+            QUIZ_EXPOSURE_HALF_LIFE_DAYS,
+            QUIZ_EXPOSURE_FLOOR,
+        )
+        # Le catalogue statique n'a pas de date de création : il est intemporel,
+        # donc ni avantagé ni pénalisé (facteur plein).
+        created = q.get("created_at")
+        if created:
+            fresh = selection.decay(
+                selection.age_days(created), QUIZ_FRESHNESS_HALF_LIFE_DAYS,
+            )
+            weight *= max(QUIZ_FRESHNESS_FLOOR, fresh)
+        weights.append(weight)
+    return weights
+
+
+def _pick(items: list[dict], terms: list[str], count: int, user_id: int) -> list[dict]:
+    """``count`` questions tirées dans le vivier, pondérées par :func:`_weights`."""
+    if count <= 0 or not items:
+        return []
+    return selection.weighted_sample(items, _weights(items, terms, user_id), count)
+
+
+def _weighted_order(items: list[dict], terms: list[str], user_id: int) -> list[dict]:
+    """Vivier réordonné par tirage pondéré, sans le tronquer.
+
+    La pratique entrelacée a besoin de TOUS les candidats (elle les répartit
+    ensuite par domaine), mais dans un ordre qui tienne compte de ce qui a déjà
+    été servi — d'où un tirage de longueur totale plutôt qu'un `sort`.
+    """
+    return selection.weighted_sample(items, _weights(items, terms, user_id), len(items))
+
+
 def _topic_hits(q: dict, terms: list[str]) -> int:
     """Nombre de termes DISTINCTS du sujet retrouvés dans la question ou son cours."""
     haystack = fold(" ".join(str(part) for part in (
@@ -446,25 +539,29 @@ def _topic_hits(q: dict, terms: list[str]) -> int:
         # document, pas un mot de l'énoncé.
         q.get("course_search") or "",
     )))
-    return sum(1 for term in terms if term in haystack)
+    distinct, _total = selection.relevance(haystack, terms)
+    return distinct
 
 
 def _rank_by_topic(items: list[dict], terms: list[str]) -> list[dict]:
-    """Garde les questions touchées par le sujet, les plus pertinentes d'abord.
+    """Filtre le vivier sur le sujet libre et note la pertinence de chaque question.
 
-    Classement calqué sur `services.library.search_documents` : nombre de termes
-    distincts trouvés d'abord, ordre d'origine (déjà « ratées puis récentes »)
-    pour départager. Sans sujet, la liste passe telle quelle.
+    Ne classe plus : le nombre de termes distincts est rangé dans ``_topic_hits``,
+    que :func:`_weights` transforme en poids de tirage. Trier ici puis prendre la
+    tête revenait à rendre la même session à chaque fois — une question très
+    pertinente restait indéfiniment devant ses quasi-égales.
+
+    Sans sujet, la liste passe telle quelle (poids de pertinence neutre).
     """
     if not terms:
         return list(items)
-    scored = [
-        (hits, rank, q)
-        for rank, q in enumerate(items)
-        if (hits := _topic_hits(q, terms))
-    ]
-    scored.sort(key=lambda row: (-row[0], row[1]))
-    return [q for (_hits, _rank, q) in scored]
+    kept: list[dict] = []
+    for q in items:
+        hits = _topic_hits(q, terms)
+        if hits:
+            q["_topic_hits"] = hits
+            kept.append(q)
+    return kept
 
 
 def _interleave_by_category(items: list[dict], count: int) -> list[dict]:
