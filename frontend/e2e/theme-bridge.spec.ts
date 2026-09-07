@@ -11,6 +11,24 @@
 import { expect, test } from "@playwright/test";
 
 /**
+ * Canaux 0-255 d'une couleur. Deux formats : `rgb(...)` (ce que rend le
+ * navigateur) et l'hexadécimal d'un jeton lu directement. Les deux notations
+ * hexa comptent — le minifieur CSS réécrit `#ffffff` en `#fff`, et n'accepter
+ * que la forme longue faisait planter le test sur une couleur parfaitement
+ * valide. Les trois mesures ci-dessous partagent cette lecture : elle vivait
+ * en double, et une seule des deux copies acceptait la forme courte.
+ */
+function rgbOf(color: string): [number, number, number] {
+  const hex = color.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  const parts = hex
+    ? hex[1].length === 3
+      ? [...hex[1]].map((c) => parseInt(c + c, 16))
+      : [0, 2, 4].map((i) => parseInt(hex[1].slice(i, i + 2), 16))
+    : color.match(/\d+(\.\d+)?/g)!.slice(0, 3).map(Number);
+  return [parts[0], parts[1], parts[2]];
+}
+
+/**
  * Contraste WCAG entre deux couleurs `rgb(...)` telles que le navigateur les
  * rend. Mesurer le RATIO plutôt que d'affirmer des valeurs littérales : une
  * palette a le droit de changer, la lisibilité non. Les assertions littérales
@@ -18,16 +36,7 @@ import { expect, test } from "@playwright/test";
  */
 function contrast(a: string, b: string): number {
   const luminance = (color: string) => {
-    // Deux formats : `rgb(...)` (ce que rend le navigateur) et l'hexadécimal
-    // d'un jeton lu directement. Les deux notations hexa comptent — le minifieur
-    // CSS réécrit `#ffffff` en `#fff`, et n'accepter que la forme longue faisait
-    // planter le test sur une couleur parfaitement valide.
-    const hex = color.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
-    const [r, g, b2] = hex
-      ? hex[1].length === 3
-        ? [...hex[1]].map((c) => parseInt(c + c, 16))
-        : [0, 2, 4].map((i) => parseInt(hex[1].slice(i, i + 2), 16))
-      : color.match(/\d+(\.\d+)?/g)!.slice(0, 3).map(Number);
+    const [r, g, b2] = rgbOf(color);
     const channel = (v: number) => {
       const c = v / 255;
       return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
@@ -43,13 +52,7 @@ function contrast(a: string, b: string): number {
  *  l'autre : c'est la teinte qui le dit, pas le contraste. */
 function hueGap(a: string, b: string): number {
   const hue = (color: string) => {
-    const hex = color.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
-    const [r, g, bl] = hex
-      ? hex[1].length === 3
-        ? [...hex[1]].map((c) => parseInt(c + c, 16))
-        : [0, 2, 4].map((i) => parseInt(hex[1].slice(i, i + 2), 16))
-      : color.match(/\d+(\.\d+)?/g)!.slice(0, 3).map(Number);
-    const [rn, gn, bn] = [r / 255, g / 255, bl / 255];
+    const [rn, gn, bn] = rgbOf(color).map((v) => v / 255);
     const max = Math.max(rn, gn, bn);
     const min = Math.min(rn, gn, bn);
     if (max === min) return 0;
@@ -60,6 +63,27 @@ function hueGap(a: string, b: string): number {
   };
   const gap = Math.abs(hue(a) - hue(b));
   return Math.min(gap, 360 - gap);
+}
+
+/**
+ * Écart de SATURATION (HSL, 0-1). Le troisième axe, et celui qui a réellement
+ * décidé de la palette : `--warning` est une terre cuite à 20° de teinte de
+ * l'ambre de la marque, donc indiscernable si l'on ne regarde que la teinte —
+ * ce qui la sépare est d'être deux fois moins saturée (0,44 contre 0,92).
+ * Le raisonnement complet est dans tokens.css, au-dessus des trois jetons.
+ *
+ * C'est le même axe qui condamne l'or `#8a6a12` d'avant : 6° de teinte ET
+ * 0,15 de saturation d'écart, il ne s'échappe par aucune des trois portes.
+ */
+function satGap(a: string, b: string): number {
+  const saturation = (color: string) => {
+    const [r, g, b2] = rgbOf(color).map((v) => v / 255);
+    const max = Math.max(r, g, b2);
+    const min = Math.min(r, g, b2);
+    const l = (max + min) / 2;
+    return max === min ? 0 : (max - min) / (1 - Math.abs(2 * l - 1));
+  };
+  return Math.abs(saturation(a) - saturation(b));
 }
 
 /** Valeurs brutes de jetons `--x` sous un thème donné. */
@@ -252,18 +276,29 @@ test.describe("Pont tokens.css -> Tailwind", () => {
         ["--warning", "--success"],
       ];
       for (const [a, b] of pairs) {
-        // Discernable sur AU MOINS un des deux axes. Deux remplissages très
+        // Discernable sur AU MOINS un des TROIS axes. Deux remplissages très
         // proches en teinte restent lisibles s'ils s'écartent franchement en
         // luminance (l'ambre et le rouge sombre du thème clair : 34° mais
-        // 3,04:1 — de l'or vif contre un bordeaux). Ce qu'on interdit, c'est
-        // qu'ils soient proches sur les DEUX, ce qui était le cas de l'ancien
-        // `--warning` doré : 6° et 2,36:1.
+        // 3,04:1 — de l'or vif contre un bordeaux), ou en SATURATION (l'ambre
+        // et la terre cuite : 20° et 2,76:1, mais 0,48 de saturation d'écart).
+        //
+        // La saturation est arrivée en troisième : sans elle, ce test refusait
+        // `--warning: #935339`, une valeur pourtant choisie exprès et sur ce
+        // critère-là (voir tokens.css). Un test qui interdit la décision qu'il
+        // était censé protéger mesurait la mauvaise chose.
+        //
+        // L'échappatoire par la saturation exige quand même 10° de teinte :
+        // l'or `#9a6b22` d'avant s'écarte de 0,28 en saturation mais n'est
+        // qu'à 1° de l'ambre — à teinte identique, aucune désaturation ne rend
+        // deux barres voisines distinguables. Ce qu'on interdit reste le même :
+        // être proche sur TOUS les axes à la fois.
         const gap = hueGap(t[a], t[b]);
         const ratio = contrast(t[a], t[b]);
+        const sat = satGap(t[a], t[b]);
         expect(
-          gap > 40 || ratio > 2.5,
+          gap > 40 || ratio > 2.5 || (gap >= 10 && sat >= 0.2),
           `${a} (${t[a]}) et ${b} (${t[b]}) se ressemblent trop en thème ${theme} : ` +
-            `${gap.toFixed(0)}° de teinte et ${ratio.toFixed(2)}:1`,
+            `${gap.toFixed(0)}° de teinte, ${ratio.toFixed(2)}:1 et ${sat.toFixed(2)} de saturation`,
         ).toBe(true);
       }
     }
