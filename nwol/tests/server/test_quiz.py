@@ -645,9 +645,14 @@ def test_a_failed_question_keeps_priority_despite_the_cooldown(client):
     question ratée (chaque fois qu'elle sort, elle est réamortie). C'est ce
     contrepoids qui borne le bonus — et c'est voulu : on veut la revoir souvent,
     pas la revoir à chaque session.
+
+    Deux verrous, séparés exprès : le marquage `failed` (déterministe) puis la
+    sur-représentation (statistique). Voir les commentaires en place.
     """
+    from config.settings import QUIZ_SEARCH_POOL
     from db import get_connection
     from db.answers import save_answer
+    from db.quiz_questions import get_quiz_base_questions
     from db.user import DEFAULT_USER_ID
 
     doc_id = _seed_many("physique", 40)
@@ -656,7 +661,32 @@ def test_a_failed_question_keeps_priority_despite_the_cooldown(client):
     ).fetchone()["id"]
     save_answer(qid, DEFAULT_USER_ID, "à côté", verdict="incorrect")
 
-    rounds = 60
+    # Verrou 1, DÉTERMINISTE : la question est bien marquée « ratée » dans le
+    # vivier. `services.quiz._weights` ne multiplie par QUIZ_FAILED_BONUS que si
+    # cette colonne remonte — si la jointure sur `answers` ne voit pas la
+    # réponse, il n'y a plus de bonus DU TOUT et le tirage devient uniforme.
+    # Séparé du verrou statistique exprès : mélangés, un rouge ne disait pas
+    # lequel des deux avait lâché, et l'écart mesuré (ratio ~1,0 au lieu de
+    # ~1,8) ressemblait à de la malchance alors qu'il ne l'était pas.
+    pool = get_quiz_base_questions(DEFAULT_USER_ID, QUIZ_SEARCH_POOL, "physique")
+    marked = next((q for q in pool if q["id"] == qid), None)
+    assert marked is not None and marked["failed"], (
+        "la question ratée n'est pas marquée `failed` dans le vivier : le bonus "
+        "de répétition espacée n'a rien sur quoi s'appliquer"
+    )
+
+    # Verrou 2, STATISTIQUE — d'où le nombre de tours. Le tirage est pondéré,
+    # donc le ratio est une variable aléatoire. Mesuré sur 200 répétitions à
+    # 60 tours : médiane 1,70, écart-type 0,24, mais MINIMUM 1,14 — le seuil de
+    # 1,25 tombait dans la queue et rendait ce test rouge ~3 fois sur 100 sans
+    # qu'aucun comportement n'ait changé. À 300 tours l'écart-type tombe à 0,09
+    # (médiane 1,80, minimum mesuré 1,60 sur 30 essais) : le seuil est à près de
+    # six écarts-types, et un échec redevient une information.
+    #
+    # Une graine fixe aurait aussi supprimé l'aléa, mais elle fige le `random`
+    # global que partagent les 600 autres tests, et elle n'aurait vérifié qu'UN
+    # tirage — celui-ci en vérifie la loi.
+    rounds = 300
     counts: dict[int, int] = {}
     for _ in range(rounds):
         for served in _ids(client, subject="physique", n=10):
