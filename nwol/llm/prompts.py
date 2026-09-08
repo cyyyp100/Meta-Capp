@@ -3015,6 +3015,8 @@ def build_intervention_prompt(context: dict) -> str:
         "hard_page": "la page contient beaucoup de mathématiques ou de figures",
         "repeated_questions": "l'étudiant a posé plusieurs questions sur cette page",
         "flashcard_due": "une flashcard de l'étudiant est arrivée à échéance de révision",
+        "math_ahead": "la PAGE SUIVANTE, que l'étudiant n'a pas encore atteinte, est dense en formules mathématiques",
+        "answer_fatigue": "les réponses de l'étudiant raccourcissent d'une question à l'autre : il produit de moins en moins, signe qu'il n'apprend plus",
     }
     trigger_labels_en = {
         "long_dwell": "the student has stayed a long time on the same page",
@@ -3023,6 +3025,8 @@ def build_intervention_prompt(context: dict) -> str:
         "hard_page": "the page is heavy on math or figures",
         "repeated_questions": "the student asked several questions on this page",
         "flashcard_due": "one of the student's flashcards is due for review",
+        "math_ahead": "the NEXT page, which the student has not reached yet, is dense with mathematical formulas",
+        "answer_fatigue": "the student's answers keep getting shorter from one question to the next: they are producing less and less, a sign that learning has stopped",
     }
     trigger = str(context.get("trigger") or "long_dwell")
     page = context.get("page", "?")
@@ -3033,20 +3037,28 @@ def build_intervention_prompt(context: dict) -> str:
     hl_quotes = _format_quote_lines(context.get("user_highlights"), limit=3)
     hl_line_fr = f"\nPassages surlignés par l'étudiant :\n{hl_quotes}" if hl_quotes else ""
     hl_line_en = f"\nPassages highlighted by the student:\n{hl_quotes}" if hl_quotes else ""
+    # Page suivante (signal « formules à venir ») : elle sert à ANNONCER, jamais
+    # à citer — les surlignages ne savent viser que la page affichée.
+    next_page = " ".join(str(context.get("next_page_text") or "").split())[:900]
+    next_fr = f"\n\nDébut de la page suivante (pas encore affichée, ne la cite pas mot pour mot) :\n---\n{next_page}\n---" if next_page else ""
+    next_en = f"\n\nBeginning of the next page (not displayed yet, do not quote it word for word):\n---\n{next_page}\n---" if next_page else ""
+    lengths = [int(n) for n in (context.get("answer_lengths") or [])]
+    len_fr = f"\nLongueur des dernières réponses écrites (caractères) : {' → '.join(str(n) for n in lengths)}." if lengths else ""
+    len_en = f"\nLength of the last written answers (characters): {' → '.join(str(n) for n in lengths)}." if lengths else ""
 
     if _i18n.current_lang() == "en":
         reason = trigger_labels_en.get(trigger, trigger)
         return f"""You are Gemma, the discreet reading assistant of MetaC-App. The application has ALREADY detected a pedagogical signal worth a brief nudge, so you are going to step in now — gently and warmly. Your job here is to FORMULATE that intervention, not to second-guess whether one is warranted.
 
 Observed signal: {reason} (page {page}).{due_line_en}{hl_line_en}
-Time on page: {context.get("dwell_s", "?")} s — visits: {context.get("visits", "?")} — questions asked on this page: {context.get("user_questions_on_page", 0)}.
+Time on page: {context.get("dwell_s", "?")} s — visits: {context.get("visits", "?")} — questions asked on this page: {context.get("user_questions_on_page", 0)}.{len_en}
 Session gauges (0-100): {_json(context.get("gauges") or {})}
 Assistant mode: {mode} ("coach" = warmer and more talkative, "normal" = sober and to the point).
 
 Text of the page:
 ---
 {str(context.get("page_text") or "")[:2500]}
----
+---{next_en}
 
 Respond in valid JSON, without Markdown:
 {{
@@ -3062,7 +3074,8 @@ Constraints:
 - Prefer "ask_question" when you can ask a good question about this page (then fill "question"); otherwise "offer_help"/"rephrase_offer" and leave "question" empty.
 - "review_flashcard" only if the observed signal is a due flashcard: briefly offer to review it (mention its topic in message), without interrupting a difficult passage.
 - highlights: 0 to 2 quotes copied WORD FOR WORD from the page text (never rephrased), pointing at the passage your intervention is about — it will be highlighted on the page. Empty list if not applicable.
-- "suggest_pause" only if the attention gauge is clearly low.
+- "suggest_pause" if the attention gauge is clearly low, and ALWAYS when the observed signal is shortening answers: say plainly what you observed (their answers are getting shorter), state that a short break helps more than pushing on, and leave "question" empty — do not ask anything of someone who has stopped producing.
+- When the observed signal is formulas on the NEXT page: announce them before they arrive ("the next page is built around formulas"), advise slowing the reading pace and tying each formula to a concrete example. kind stays "offer_help" (or "rephrase_offer" to offer a rephrasing once they get there), and highlights MUST be empty — the passage is not on screen yet.
 - "rephrase_offer" if the page looks dense or mathematical: offer to rephrase it.
 - Keep should_intervene true by default (a signal was already detected). Set it to false ONLY if the page is so trivial that intervening would clearly disturb more than it helps.
 - message: maximum 2 sentences, no emoji spam, never guilt-tripping."""
@@ -3071,14 +3084,14 @@ Constraints:
     return f"""Tu es Gemma, l'assistante de lecture discrète de MetaC-App. L'application a DÉJÀ détecté un signal pédagogique qui mérite un petit coup de pouce, donc tu vas intervenir maintenant — brièvement et chaleureusement. Ton rôle ici est de FORMULER cette intervention, pas de redécider s'il faut intervenir.
 
 Signal observé : {reason} (page {page}).{due_line_fr}{hl_line_fr}
-Temps sur la page : {context.get("dwell_s", "?")} s — visites : {context.get("visits", "?")} — questions posées sur cette page : {context.get("user_questions_on_page", 0)}.
+Temps sur la page : {context.get("dwell_s", "?")} s — visites : {context.get("visits", "?")} — questions posées sur cette page : {context.get("user_questions_on_page", 0)}.{len_fr}
 Jauges de session (0-100) : {_json(context.get("gauges") or {})}
 Mode de l'assistant : {mode} ("coach" = plus chaleureux et bavard, "normal" = sobre et direct).
 
 Texte de la page :
 ---
 {str(context.get("page_text") or "")[:2500]}
----
+---{next_fr}
 
 Réponds en JSON valide, sans Markdown :
 {{
@@ -3094,7 +3107,8 @@ Contraintes :
 - Privilégie "ask_question" quand tu peux poser une bonne question sur cette page (remplis alors "question") ; sinon "offer_help"/"rephrase_offer" et laisse "question" vide.
 - "review_flashcard" uniquement si le signal observé est une flashcard due : propose brièvement de la réviser (mentionne son sujet dans message), sans interrompre un passage difficile.
 - highlights : 0 à 2 citations copiées MOT POUR MOT du texte de la page (jamais reformulées), désignant le passage concerné par ton intervention — il sera surligné sur la page. Liste vide si non pertinent.
-- "suggest_pause" seulement si la jauge d'attention est nettement basse.
+- "suggest_pause" si la jauge d'attention est nettement basse, et TOUJOURS quand le signal observé est le raccourcissement des réponses : dis simplement ce que tu observes (ses réponses raccourcissent), explique qu'une pause courte fera plus qu'insister, et laisse "question" vide — on ne demande rien de plus à quelqu'un qui ne produit plus.
+- Quand le signal observé est les formules de la page SUIVANTE : annonce-les avant qu'elles arrivent (« la page suivante est bâtie sur des formules »), conseille de ralentir la vitesse de lecture et de relier chaque formule à un exemple concret. kind reste "offer_help" (ou "rephrase_offer" pour proposer de reformuler une fois sur place), et highlights DOIT être vide — le passage n'est pas encore à l'écran.
 - "rephrase_offer" si la page semble dense ou mathématique : propose de la reformuler.
 - Garde should_intervene à true par défaut (un signal a déjà été détecté). Ne le mets à false QUE si la page est triviale au point qu'intervenir dérangerait clairement plus que ça n'aiderait.
 - message : 2 phrases maximum, pas de déluge d'emojis, jamais culpabilisant."""

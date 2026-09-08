@@ -5,14 +5,18 @@
 #                     {"type":"viewport","page"} | {"type":"mode","mode"} | {"type":"focus"}
 #                     {"type":"activity","hidden":bool}  # fenêtre masquée / app au
 #                       second plan -> alimente la dérive passive d'attention
+#                     {"type":"pause","minutes":int}  # pause recommandée acceptée
+#                       (0 = reprise anticipée) -> silence + dérive suspendue
 # serveur -> client : {"type":"loading"} | {"type":"answer","answer","highlights"}
 #                     {"type":"error","message"} | {"type":"intervention",...}
 #                     {"type":"system","message"}
 #                     {"type":"scanning","active":bool}  # Gemma inspecte la page (décide
 #                       d'intervenir ou non) -> l'UI tourne la bulle vers le PDF
 #                     {"type":"qa_question"|"gated_question","question","choices",
-#                      "question_type","mask"}  # mask = {"quote","placeholder"} du
-#                       passage à cacher dans la page (rappel libre), sinon null
+#                      "question_type","mask","session_hint"}  # mask = {"quote",
+#                       "placeholder"} du passage à cacher dans la page (rappel
+#                       libre), sinon null ; session_hint = conseil de régulation
+#                       de séance (pause courte…), vide la plupart du temps
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +27,13 @@ from typing import Literal
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
-from config.settings import ASSISTANT_MODES, FOCUS_DEFAULT_MIN
+from config.settings import (
+    ASSISTANT_MODES,
+    FOCUS_DEFAULT_MIN,
+    PAUSE_ATTENTION_RECOVERY,
+    PAUSE_DEFAULT_MIN,
+    PAUSE_MAX_MIN,
+)
 from db.answers import save_answer
 from db.documents import get_document, update_last_page
 from db.flashcards import get_due_flashcards, save_flashcard
@@ -64,10 +74,11 @@ class ReaderMessage(BaseModel):
 
     type: Literal[
         "viewport", "mode", "focus", "ask", "rephrase", "recap", "hook",
-        "start_qa", "qa_answer", "activity",
+        "start_qa", "qa_answer", "activity", "pause",
     ]
     page: int | None = None
     hidden: bool = False
+    minutes: int | None = None
     session_id: int | None = None
     mode: str | None = None
     question: str | None = None
@@ -82,6 +93,17 @@ class ReaderMessage(BaseModel):
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    @field_validator("minutes", mode="before")
+    @classmethod
+    def _bounded_minutes(cls, value):
+        # Durée bornée côté serveur (S4) : un client ne décide pas d'un silence
+        # d'une heure. None -> durée par défaut, décidée à la lecture.
+        try:
+            minutes = int(value)
+        except (TypeError, ValueError):
+            return None
+        return max(0, min(minutes, PAUSE_MAX_MIN))
 
     @field_validator("session_id", mode="before")
     @classmethod
@@ -135,6 +157,11 @@ async def reader_stream(ws: WebSocket, doc_id: int) -> None:
         "consecutive_incorrect": 0,  # série d'erreurs en cours (modèle d'attention)
         "qa_history": [],  # Q&R de la session relayées au LLM (5 dernières)
         "pages_seen": 0,  # pages distinctes vues au dernier tick (progression)
+        # Pause recommandée en cours : fin prévue, début réel et durée annoncée.
+        # Tant qu'elle dure, Gemma se tait ET l'observation passive est suspendue.
+        "pause_until": 0.0,
+        "pause_started": 0.0,
+        "pause_planned_s": 0.0,
     }
     state["live_gauges"] = await loop.run_in_executor(None, session.LiveGauges)
     # Mémoire de conversation d'une session à l'autre. Best-effort : un document
@@ -228,6 +255,11 @@ async def reader_stream(ws: WebSocket, doc_id: int) -> None:
             "question": result.get("question", ""),
             "choices": result.get("choices"),
             "question_type": qtype,
+            # Conseil de régulation de séance (« ton attention est basse, fais une
+            # pause courte ») : le prompt le demande sous le seuil d'attention,
+            # le repli hors ligne le remplit aussi, le schéma le valide — et il
+            # s'arrêtait ici, à un dict près du client. Vide la plupart du temps.
+            "session_hint": str(result.get("session_hint") or "").strip(),
             # Passage à masquer dans la page (rappel libre) : citation + texte de
             # remplacement, résolus par le service. None quand il n'y a rien à cacher.
             "mask": assistant.resolve_paragraph_mask(
@@ -272,6 +304,8 @@ async def reader_stream(ws: WebSocket, doc_id: int) -> None:
                 mode=str(ctx["mode"]),
                 gauges=ctx.get("gauges") or {},
                 due_flashcard_front=str(ctx.get("due_flashcard_front") or ""),
+                next_page_text=str(ctx.get("next_page_text") or ""),
+                answer_lengths=list(ctx.get("answer_lengths") or []),
             )
             decide_intervention_async(full, _finish, lambda _m: _finish(None))
         except Exception as exc:  # pragma: no cover - le LLM reste un bonus
@@ -296,11 +330,15 @@ async def reader_stream(ws: WebSocket, doc_id: int) -> None:
                 history=list(state["qa_history"]),
             )
             return
+        kind = str(payload.get("kind") or "offer_help")
         push_threadsafe(loop, out, {
             "type": "intervention",
             "message": payload.get("message", ""),
             "question": payload.get("question", ""),
-            "kind": payload.get("kind", "offer_help"),
+            "kind": kind,
+            # Durée proposée par la carte de pause. Elle vient du serveur : la
+            # cadence de Gemma se règle dans config/settings.py, pas dans l'UI.
+            "pause_minutes": PAUSE_DEFAULT_MIN if kind == "suggest_pause" else 0,
             "highlights": payload.get("highlights", []),
             # Carte à réviser (kind == "review_flashcard") : le client l'affiche
             # directement au lieu d'un simple message.
@@ -339,12 +377,42 @@ async def reader_stream(ws: WebSocket, doc_id: int) -> None:
             away=bool(state["away"]),
         )
 
+    async def close_pause(now: float) -> None:
+        """Fin de pause : un crédit d'attention, au prorata du repos réellement pris.
+
+        La pause a suspendu la dérive passive ; ce crédit est le bénéfice de la
+        pause elle-même. Au prorata parce qu'une reprise au bout de dix secondes
+        n'est pas un repos — sans quoi le raccourci « accepter puis reprendre »
+        remonterait la jauge gratuitement, et le profil avec elle.
+
+        L'état est fermé ICI, dans la boucle asyncio (mono-thread) : l'expiration
+        du décompte et la reprise anticipée y arrivent toutes les deux, et ne
+        peuvent donc pas créditer deux fois. Seule l'écriture part en exécuteur."""
+        started = float(state["pause_started"] or now)
+        planned = float(state["pause_planned_s"] or 0.0)
+        state["pause_until"] = 0.0
+        state["pause_started"] = 0.0
+        state["pause_planned_s"] = 0.0
+        gauges = state["live_gauges"]
+        if gauges is None or planned <= 0.0:
+            return
+        ratio = max(0.0, min(1.0, (now - started) / planned))
+        await loop.run_in_executor(None, gauges.recover_attention, PAUSE_ATTENTION_RECOVERY * ratio)
+
     async def _ticker() -> None:
         last_tick = time.monotonic()
         while True:
             await asyncio.sleep(_TICK_SECONDS)
             now = time.monotonic()
             elapsed, last_tick = now - last_tick, now
+            # Pause recommandée en cours : ni observation, ni intervention. Sans
+            # cette porte, la dérive passive punirait (fenêtre masquée, page qui
+            # ne bouge plus) le repos que Gemma vient elle-même de conseiller.
+            if state["pause_until"]:
+                if now < state["pause_until"]:
+                    continue
+                await close_pause(now)
+                continue
             # Écrit (au plus une fois par minute) dans session_gauges : executor.
             await loop.run_in_executor(None, passive_attention, elapsed, now)
             if state["gated"] or now < state["focus_until"]:
@@ -383,6 +451,19 @@ async def reader_stream(ws: WebSocket, doc_id: int) -> None:
                 # Fenêtre masquée ou application au second plan : l'étudiant n'est
                 # pas devant sa page. Seul signal d'absence dont on dispose.
                 state["away"] = bool(msg.hidden)
+                continue
+
+            if kind == "pause":
+                # Pause recommandée acceptée (ou reprise anticipée : minutes=0).
+                now = time.monotonic()
+                minutes = PAUSE_DEFAULT_MIN if msg.minutes is None else int(msg.minutes)
+                if minutes <= 0:
+                    if state["pause_until"]:
+                        await close_pause(now)
+                    continue
+                state["pause_until"] = now + minutes * 60
+                state["pause_started"] = now
+                state["pause_planned_s"] = float(minutes * 60)
                 continue
 
             if kind == "mode":
@@ -496,7 +577,13 @@ async def reader_stream(ws: WebSocket, doc_id: int) -> None:
                             response_time_ms=response_time_ms,
                             consecutive_incorrect=int(state["consecutive_incorrect"]),
                         )
-                    memory.on_answer(_page, verdict)
+                    # Verdict ET forme : la longueur de ce qui vient d'être écrit
+                    # est la matière du signal de fatigue (`answer_fatigue`).
+                    memory.on_answer(
+                        _page, verdict,
+                        chars=len(_answer.strip()),
+                        response_time_ms=response_time_ms,
+                    )
                     # Q&R de la session : relayée aux prochains prompts (génération
                     # comme évaluation), qui la citaient sans jamais la recevoir.
                     state["qa_history"].append({

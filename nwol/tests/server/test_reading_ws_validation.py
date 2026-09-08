@@ -58,3 +58,16 @@ def test_snippets_capped_and_cleaned(client, monkeypatch):
         ws.receive_json()
     assert len(seen["snippets"]) == 5
     assert seen["snippets"][0] == "a"
+
+
+def test_pause_minutes_are_bounded_server_side():
+    # La durée d'un silence vient du serveur : un client ne s'accorde pas une
+    # heure sans interventions ni une durée négative.
+    from config.settings import PAUSE_MAX_MIN
+    from server.routers.reading import ReaderMessage
+
+    assert ReaderMessage.model_validate({"type": "pause", "minutes": 9999}).minutes == PAUSE_MAX_MIN
+    assert ReaderMessage.model_validate({"type": "pause", "minutes": -3}).minutes == 0
+    assert ReaderMessage.model_validate({"type": "pause", "minutes": "cinq"}).minutes is None
+    # Champ absent : la durée par défaut est décidée par le routeur, pas ici.
+    assert ReaderMessage.model_validate({"type": "pause"}).minutes is None

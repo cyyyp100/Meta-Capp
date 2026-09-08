@@ -469,6 +469,8 @@ def build_intervention_context(
     mode: str,
     gauges: dict | None = None,
     due_flashcard_front: str = "",
+    next_page_text: str = "",
+    answer_lengths: list[int] | None = None,
 ) -> dict:
     """Contexte d'une décision d'intervention autonome.
 
@@ -495,6 +497,12 @@ def build_intervention_context(
         "gauges": gauges,
         "mode": mode,
         "due_flashcard_front": due_front,
+        # Page SUIVANTE (signal « formules à venir ») : elle n'est pas encore à
+        # l'écran, donc elle informe le message et jamais les surlignages.
+        "next_page_text": str(next_page_text or "")[:1200],
+        # Longueurs des dernières réponses (signal de fatigue) : de quoi dire
+        # ce qu'on a observé plutôt qu'un vague « tu sembles fatigué ».
+        "answer_lengths": [int(n) for n in (answer_lengths or [])],
         "user_highlights": _safe(lambda: get_highlight_quotes(doc_id, page=page), []),
     }
 

@@ -374,6 +374,28 @@ ASSISTANT_LOW_ATTENTION = 40.0      # seuil de jauge attention
 ASSISTANT_QUESTIONS_TRIGGER = 2     # questions utilisateur sur la même page
 ASSISTANT_MAX_INTERVENTIONS = 6     # par session
 
+# Fatigue de production : les réponses de l'étudiant rétrécissent d'une question
+# à l'autre. C'est le signal « il n'apprend plus », qui appelle une pause et non
+# une question de plus. Lu par `services/intervention.detect_answer_fatigue`.
+ASSISTANT_FATIGUE_WINDOW = 3          # réponses consécutives observées
+ASSISTANT_FATIGUE_SHRINK_RATIO = 0.55  # dernière / première réponse de la fenêtre
+ASSISTANT_FATIGUE_MIN_CHARS = 60      # départ trop court -> on ne conclut rien
+
+# Formules à venir : la page SUIVANTE est dense en mathématiques. Prévenir avant
+# d'y arriver est tout l'intérêt du signal, donc il n'est pas soumis au plancher
+# de dwell des déclencheurs « doux » — seulement à ce court temps de lecture, qui
+# évite de parler pendant un défilement rapide.
+ASSISTANT_MATH_AHEAD_DWELL_S = 15.0
+
+# ── Pauses recommandées ──────────────────────────────────────────────────────
+# Une pause acceptée n'est pas du décrochage : pendant sa durée, la dérive
+# passive d'attention est suspendue (sans quoi le repos que Gemma vient de
+# conseiller ferait chuter la jauge) et l'assistant se tait. Au retour, la jauge
+# est recréditée une fois — c'est le bénéfice mesurable de la pause.
+PAUSE_DEFAULT_MIN = 5
+PAUSE_MAX_MIN = 20
+PAUSE_ATTENTION_RECOVERY = 12.0
+
 # Mode focus : interventions coupées pendant N minutes (déclenché depuis le panneau)
 FOCUS_DEFAULT_MIN = 25
 

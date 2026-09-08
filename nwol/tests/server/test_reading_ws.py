@@ -206,6 +206,76 @@ def test_live_gauges_seed_and_apply(client):
     assert after["attention"] > snap["attention"]
 
 
+def test_pause_credits_attention_at_most_once_and_never_downwards(client):
+    # Une pause conseillée puis prise doit RAPPORTER quelque chose : c'est le
+    # seul mouvement d'attention qui ne vient ni du LLM ni de la lecture.
+    from services.session import LiveGauges
+
+    lg = LiveGauges()
+    before = lg.snapshot()["attention"]
+    assert lg.recover_attention(12.0)["attention"] > before
+    # Un crédit nul ou négatif ne fait rien (une reprise immédiate ne repose pas).
+    steady = lg.snapshot()["attention"]
+    assert lg.recover_attention(0.0)["attention"] == steady
+    assert lg.recover_attention(-30.0)["attention"] == steady
+
+
+def test_qa_question_carries_the_session_hint(client, monkeypatch):
+    # `session_hint` est demandé par le prompt sous le seuil d'attention, rempli
+    # même en repli hors ligne et validé par le schéma — puis il s'arrêtait au
+    # routeur, à un champ près du client, et personne n'a jamais vu ce conseil.
+    from services import assistant
+
+    monkeypatch.setattr(
+        assistant, "generate_page_question",
+        lambda d, p, ok, err, **kw: ok({
+            "question": "Que retiens-tu de ce passage ?",
+            "choices": None,
+            "question_type": "open",
+            "session_hint": "Ton attention baisse : fais une pause courte avant de continuer.",
+        }),
+    )
+
+    with client.websocket_connect("/api/reader/1/stream") as ws:
+        ws.send_json({"type": "start_qa", "page": 1})
+        assert ws.receive_json()["type"] == "loading"
+        q = ws.receive_json()
+        assert q["type"] == "qa_question"
+        assert "pause courte" in q["session_hint"]
+
+
+def test_qa_question_without_hint_carries_an_empty_string(client, monkeypatch):
+    # Le cas ordinaire : pas de conseil, un champ vide — jamais None, que l'UI
+    # afficherait tel quel.
+    from services import assistant
+
+    monkeypatch.setattr(
+        assistant, "generate_page_question",
+        lambda d, p, ok, err, **kw: ok({"question": "Et donc ?", "choices": None, "question_type": "open"}),
+    )
+    with client.websocket_connect("/api/reader/1/stream") as ws:
+        ws.send_json({"type": "start_qa", "page": 1})
+        ws.receive_json()
+        assert ws.receive_json()["session_hint"] == ""
+
+
+def test_pause_message_keeps_the_channel_open(client, monkeypatch):
+    # La pause ne répond rien (la carte côté client tient le compte à rebours) :
+    # ce qui doit rester vrai, c'est que le canal continue de servir.
+    from services import assistant
+
+    monkeypatch.setattr(
+        assistant, "answer_question",
+        lambda d, p, q, ok, err, **kw: ok({"answer": "ok", "highlights": []}),
+    )
+    with client.websocket_connect("/api/reader/1/stream") as ws:
+        ws.send_json({"type": "pause", "minutes": 5})
+        ws.send_json({"type": "pause", "minutes": 0})  # reprise anticipée
+        ws.send_json({"type": "ask", "question": "toujours là ?", "page": 1})
+        assert ws.receive_json()["type"] == "loading"
+        assert ws.receive_json()["type"] == "answer"
+
+
 def test_intervention_context_relays_policy_trigger(client):
     # build_intervention_context ne DÉCIDE plus rien : il relaie le signal que la
     # politique (services/intervention.py) lui passe. Garde-fou anti-duplication.

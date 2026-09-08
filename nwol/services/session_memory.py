@@ -37,8 +37,26 @@ class SessionMemory:
     def on_user_question(self, page: int, question: str = "") -> None:
         self.questions_by_page[page] = self.questions_by_page.get(page, 0) + 1
 
-    def on_answer(self, page: int, verdict: str | None) -> None:
-        self.answers.append({"page": page, "verdict": verdict})
+    def on_answer(
+        self,
+        page: int,
+        verdict: str | None,
+        chars: int = 0,
+        response_time_ms: int | None = None,
+    ) -> None:
+        """Enregistre une réponse évaluée — verdict ET forme.
+
+        `chars` (longueur de ce que l'étudiant a écrit) et `response_time_ms`
+        étaient calculés puis jetés : ils ne servaient qu'à la jauge du moment.
+        Gardés en série, ils disent si la production RÉTRÉCIT au fil de la
+        session, c'est-à-dire si l'étudiant a décroché (cf.
+        `services/intervention.detect_answer_fatigue`)."""
+        self.answers.append({
+            "page": page,
+            "verdict": verdict,
+            "chars": max(0, int(chars)),
+            "response_time_ms": response_time_ms,
+        })
         if verdict == "incorrect":
             self.difficulties.append({"page": page, "kind": "incorrect_answer"})
 
@@ -60,6 +78,17 @@ class SessionMemory:
 
     def pages_seen(self) -> set[int]:
         return set(self.dwell_by_page)
+
+    def answers_count(self) -> int:
+        return len(self.answers)
+
+    def recent_answer_lengths(self, window: int) -> list[int]:
+        """Longueurs des `window` dernières réponses écrites, dans l'ordre.
+
+        Les réponses vides ne sont pas comptées : un envoi vide n'est pas une
+        production plus courte, c'est une absence de production."""
+        lengths = [int(a.get("chars") or 0) for a in self.answers if int(a.get("chars") or 0) > 0]
+        return lengths[-max(0, int(window)):] if window else []
 
     def help_pages(self, top_n: int = 3) -> list[dict]:
         ranked = sorted(self.questions_by_page.items(), key=lambda kv: (-kv[1], kv[0]))

@@ -1,7 +1,8 @@
 # services/intervention.py — Politique d'intervention autonome de l'assistant.
 #
-# Surveille la lecture (temps sur page, retours, jauges, densité mathématique,
-# questions répétées) et demande au LLM une décision structurée
+# Surveille la lecture (temps sur page, retours, jauges, densité mathématique
+# de la page courante ET de la suivante, questions répétées, rétrécissement des
+# réponses) et demande au LLM une décision structurée
 # {should_intervene, kind, message, question}. Les cooldowns global et par page
 # évitent un assistant trop bavard ; le mode « discret » coupe tout.
 #
@@ -17,8 +18,12 @@ from typing import Callable
 
 from config.settings import (
     ASSISTANT_DWELL_TRIGGER_S,
+    ASSISTANT_FATIGUE_MIN_CHARS,
+    ASSISTANT_FATIGUE_SHRINK_RATIO,
+    ASSISTANT_FATIGUE_WINDOW,
     ASSISTANT_GLOBAL_COOLDOWN,
     ASSISTANT_LOW_ATTENTION,
+    ASSISTANT_MATH_AHEAD_DWELL_S,
     ASSISTANT_MAX_INTERVENTIONS,
     ASSISTANT_PAGE_COOLDOWN,
     ASSISTANT_QUESTIONS_TRIGGER,
@@ -30,6 +35,12 @@ from services.session_memory import SessionMemory
 logger = logging.getLogger("services.intervention")
 
 INTERVENTION_KINDS = {"offer_help", "ask_question", "suggest_pause", "rephrase_offer", "review_flashcard"}
+
+# Déclencheurs qui parlent de la SESSION, pas de la page. L'anti-répétition par
+# (page, raison) ne les concerne pas : sans cette exception, la fatigue se
+# rejouerait à chaque changement de page — et se tairait sur celle où elle a été
+# détectée, alors même que l'étudiant y reste. Ils portent leur propre réarmement.
+_SESSION_SCOPED_TRIGGERS = {"answer_fatigue"}
 
 # Densité de symboles mathématiques au-delà de laquelle une page est jugée « dure ».
 _MATH_CHARS_RE = re.compile(r"[=∑∫√±×÷≈≤≥∂∇λμσΩπθ^_{}\\]|\b[a-z]\([a-z]\)")
@@ -74,6 +85,10 @@ class AssistantInterventionPolicy:
         self._flashcard_prompted = False
         self._opened_at = time.monotonic()
         self._warmed_up = False
+        # Nombre de réponses au dernier signal de fatigue : il faut une fenêtre
+        # ENTIÈRE de nouvelles réponses avant de pouvoir le redonner.
+        self._fatigue_at_answers = 0
+        self._next_page_text = ""
 
     # ------------------------------------------------------------------
     # Notifications externes
@@ -93,6 +108,8 @@ class AssistantInterventionPolicy:
         self._flashcard_prompted = False
         self._opened_at = time.monotonic()
         self._warmed_up = False
+        self._fatigue_at_answers = 0
+        self._next_page_text = ""
 
     # ------------------------------------------------------------------
     # Boucle de décision
@@ -122,7 +139,9 @@ class AssistantInterventionPolicy:
             return
 
         reason = self._detect_trigger(page, mode, now)
-        if reason is None or (page, reason) in self._fired_reasons:
+        if reason is None:
+            return
+        if reason not in _SESSION_SCOPED_TRIGGERS and (page, reason) in self._fired_reasons:
             return
 
         self._fired_reasons.add((page, reason))
@@ -141,6 +160,13 @@ class AssistantInterventionPolicy:
         }
         if reason == "flashcard_due" and self._due_card:
             context["due_flashcard_front"] = str(self._due_card.get("front") or "")
+        if reason == "math_ahead":
+            # Le texte de la page SUIVANTE : c'est de lui que parle l'intervention,
+            # et il ne doit surtout pas remplacer `page_text` — les surlignages
+            # sont cherchés dans la page affichée.
+            context["next_page_text"] = self._next_page_text[:1200]
+        if reason == "answer_fatigue":
+            context["answer_lengths"] = self._memory.recent_answer_lengths(ASSISTANT_FATIGUE_WINDOW)
 
         def _on_done(decision: dict | None) -> None:
             self._handle_decision(decision, page)
@@ -182,9 +208,23 @@ class AssistantInterventionPolicy:
     # ------------------------------------------------------------------
     def _detect_trigger(self, page: int, mode: str, now: float) -> str | None:
         dwell = self._memory.current_dwell(now)
+        self._next_page_text = ""
+
+        # La fatigue passe avant tout le reste : quand la production rétrécit,
+        # la bonne réaction est une pause, pas une question de plus.
+        if self._fatigue_detected():
+            return "answer_fatigue"
 
         if self._memory.questions_on(page) >= ASSISTANT_QUESTIONS_TRIGGER:
             return "repeated_questions"
+
+        # Le seul déclencheur qui parle d'une page NON ENCORE atteinte. Il est
+        # donc placé avant `long_dwell` et hors du plancher de dwell des
+        # déclencheurs doux : prévenir de formules qu'on lit déjà n'est plus
+        # prévenir. Le court temps de lecture exigé évite seulement de parler
+        # au milieu d'un défilement rapide.
+        if dwell >= ASSISTANT_MATH_AHEAD_DWELL_S and self._math_ahead(page):
+            return "math_ahead"
 
         if dwell >= ASSISTANT_DWELL_TRIGGER_S.get(mode, 150.0):
             return "long_dwell"
@@ -217,6 +257,49 @@ class AssistantInterventionPolicy:
             return "hard_page"
 
         return None
+
+    def _fatigue_detected(self) -> bool:
+        """Signal de fatigue, avec son propre réarmement.
+
+        Le compteur avance au moment de la DÉTECTION, pas de l'intervention :
+        une décision refusée par le LLM ne doit pas faire reposer la question
+        toutes les cinq secondes. Il faut une fenêtre entière de nouvelles
+        réponses avant que le signal puisse revenir."""
+        answered = self._memory.answers_count()
+        if answered - self._fatigue_at_answers < ASSISTANT_FATIGUE_WINDOW:
+            return False
+        if not detect_answer_fatigue(self._memory.recent_answer_lengths(ASSISTANT_FATIGUE_WINDOW)):
+            return False
+        self._fatigue_at_answers = answered
+        return True
+
+    def _math_ahead(self, page: int) -> bool:
+        """La page suivante est dense en maths, la page courante ne l'est pas.
+
+        La deuxième moitié compte autant que la première : annoncer des formules
+        à quelqu'un qui en lit déjà n'apprend rien — ce cas-là, c'est `hard_page`."""
+        if _is_math_heavy(self._get_page_text(page) or ""):
+            return False
+        self._next_page_text = self._get_page_text(page + 1) or ""
+        return _is_math_heavy(self._next_page_text)
+
+
+def detect_answer_fatigue(lengths: list[int]) -> bool:
+    """Les réponses de l'étudiant rétrécissent d'une question à l'autre.
+
+    Trois conditions, toutes nécessaires : une fenêtre complète, une décroissance
+    STRICTE (deux réponses courtes de suite ne sont pas une chute), et une
+    dernière réponse retombée sous une fraction de la première. Le plancher
+    `ASSISTANT_FATIGUE_MIN_CHARS` écarte celui qui écrit toujours court : on ne
+    rétrécit pas ce qui était déjà minuscule."""
+    window = list(lengths or [])[-ASSISTANT_FATIGUE_WINDOW:]
+    if len(window) < ASSISTANT_FATIGUE_WINDOW:
+        return False
+    if window[0] < ASSISTANT_FATIGUE_MIN_CHARS:
+        return False
+    if any(later >= earlier for earlier, later in zip(window, window[1:])):
+        return False
+    return window[-1] <= window[0] * ASSISTANT_FATIGUE_SHRINK_RATIO
 
 
 def _is_math_heavy(text: str) -> bool:

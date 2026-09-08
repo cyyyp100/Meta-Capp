@@ -79,7 +79,8 @@ class LiveGauges:
         ou évaluation renvoie déjà, plus le temps de réponse et la série
         d'erreurs (le modèle d'attention les attendait depuis toujours) ;
       * `apply_reading_behaviour` — la dérive passive du comportement de lecture,
-        seul chemin par lequel `attention` bouge sans LLM.
+        seul chemin par lequel `attention` bouge sans LLM ;
+      * `recover_attention` — le crédit d'une pause recommandée et prise.
 
     Persistance best-effort dans `session_gauges` dès qu'un `session_id` est connu
     (alimente le radar de stats) — un incident n'interrompt jamais la lecture."""
@@ -153,6 +154,20 @@ class LiveGauges:
         if now - self._last_passive_record >= ATTENTION_PERSIST_EVERY_S:
             self._last_passive_record = now
             self._record()
+        return self.snapshot()
+
+    def recover_attention(self, points: float) -> dict[str, float]:
+        """Crédit d'attention d'une pause réellement prise.
+
+        La dérive passive est suspendue pendant la pause (cf. le ticker du
+        lecteur) ; ce crédit-ci est le bénéfice de la pause elle-même, versé une
+        fois au retour et au prorata du temps effectivement passé loin de la
+        page. Il ne peut que remonter la jauge."""
+        gauge = self._gauges.get("attention")
+        if gauge is None or float(points) <= 0.0:
+            return self.snapshot()
+        gauge.apply_delta(float(points))
+        self._record()
         return self.snapshot()
 
     def snapshot(self) -> dict[str, float]:

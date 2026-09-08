@@ -7,7 +7,11 @@ import time
 
 import pytest
 
-from services.intervention import AssistantInterventionPolicy, _is_math_heavy
+from services.intervention import (
+    AssistantInterventionPolicy,
+    _is_math_heavy,
+    detect_answer_fatigue,
+)
 from services.session_memory import SessionMemory
 
 
@@ -144,3 +148,97 @@ def test_thresholds_come_from_settings_not_literals():
 )
 def test_is_math_heavy(text, expected):
     assert _is_math_heavy(text) is expected
+
+
+# ── Fatigue : les réponses rétrécissent ─────────────────────────────────────
+# Le signal « il n'apprend plus ». La longueur des réponses était calculée à
+# chaque évaluation puis jetée : rien n'en gardait la SÉRIE, donc rien ne
+# pouvait voir une production qui s'effondre.
+
+
+@pytest.mark.parametrize(
+    "lengths,expected",
+    [
+        ([], False),
+        ([200, 100], False),        # fenêtre incomplète
+        ([200, 120, 40], True),
+        ([200, 40, 120], False),    # ça remonte : ce n'est pas une chute
+        ([200, 120, 119], False),   # décroît à peine
+        ([30, 20, 10], False),      # a toujours écrit court : rien à conclure
+    ],
+)
+def test_detect_answer_fatigue(lengths, expected):
+    assert detect_answer_fatigue(lengths) is expected
+
+
+def test_answer_fatigue_fires_then_waits_a_whole_new_window(monkeypatch):
+    # dwell=inf neutralise `long_dwell` : on isole le signal testé.
+    policy, memory, _fired, contexts, _page = make_policy(monkeypatch, dwell=float("inf"))
+
+    memory.on_answer(1, "correct", chars=180)
+    memory.on_answer(1, "partial", chars=90)
+    policy.tick()
+    assert contexts == []  # deux réponses seulement : la fenêtre n'est pas pleine
+
+    memory.on_answer(1, "partial", chars=40)
+    policy.tick()
+    assert contexts[-1]["trigger"] == "answer_fatigue"
+    # Le prompt reçoit ce qui a été observé, pas un vague « tu sembles fatigué ».
+    assert contexts[-1]["answer_lengths"] == [180, 90, 40]
+
+    # Une réponse de plus ne relance pas le signal : il faut une fenêtre ENTIÈRE
+    # de nouvelles réponses. Sans ce réarmement, la fatigue repartirait à chaque
+    # tick — l'anti-répétition par (page, raison) ne la couvre pas, puisqu'elle
+    # parle de la session et non de la page.
+    memory.on_answer(1, "partial", chars=25)
+    policy.tick()
+    assert len(contexts) == 1
+
+
+def test_fatigue_outranks_the_page_signals(monkeypatch):
+    # Quand la production s'effondre, la bonne réaction est une pause — pas une
+    # question de plus sur la page où l'étudiant traîne depuis dix minutes.
+    policy, memory, _fired, contexts, _page = make_policy(monkeypatch)
+    memory._entered_at = time.monotonic() - 600.0
+    for chars in (200, 110, 45):
+        memory.on_answer(1, "partial", chars=chars)
+
+    policy.tick()
+
+    assert contexts[-1]["trigger"] == "answer_fatigue"
+
+
+# ── Formules à venir ────────────────────────────────────────────────────────
+# `hard_page` ne regardait que la page affichée, et arrivait derrière le
+# plancher de dwell : il ne pouvait que constater un blocage déjà installé.
+
+
+def _formula_page() -> str:
+    return "f(x) = ∑ λ_i × ∫ √(x^2 ± σ) ∂x ≈ μ ≤ Ω / θ " * 12
+
+
+def test_math_ahead_warns_before_reaching_the_formulas(monkeypatch):
+    policy, memory, _fired, contexts, _page = make_policy(monkeypatch, dwell=float("inf"))
+    memory._entered_at = time.monotonic() - 60.0
+    prose = "un paragraphe de prose parfaitement ordinaire. " * 40
+    policy._get_page_text = lambda p: _formula_page() if p == 2 else prose
+
+    policy.tick()
+
+    assert contexts[-1]["trigger"] == "math_ahead"
+    # La page suivante voyage à part : `page_text` reste la page AFFICHÉE, seule
+    # dans laquelle les surlignages savent retrouver une citation.
+    assert contexts[-1]["page_text"].startswith("un paragraphe de prose")
+    assert "∑" in contexts[-1]["next_page_text"]
+
+
+def test_math_ahead_stays_silent_once_the_formulas_are_on_screen(monkeypatch):
+    # Annoncer des formules à quelqu'un qui en lit déjà n'apprend rien : ce
+    # cas-là, c'est `hard_page`.
+    policy, memory, _fired, contexts, _page = make_policy(monkeypatch, dwell=float("inf"))
+    memory._entered_at = time.monotonic() - 60.0
+    policy._get_page_text = lambda p: _formula_page()
+
+    policy.tick()
+
+    assert contexts[-1]["trigger"] == "hard_page"

@@ -127,6 +127,49 @@ describe("GemmaPanel", () => {
     expect(screen.getByRole("button", { name: /monter.*conclure/i })).toBeInTheDocument();
   });
 
+  // `suggest_pause` traversait tout le serveur pour finir en phrase ordinaire
+  // dans le fil : rien ne la distinguait, et rien ne permettait de la prendre.
+  it("propose une pause qu'on peut réellement prendre", async () => {
+    await renderOpenPanel();
+    await act(async () => {
+      FakeWebSocket.last?.emit({
+        type: "intervention",
+        kind: "suggest_pause",
+        message: "Tes réponses raccourcissent : souffle deux minutes.",
+        question: "",
+        pause_minutes: 5,
+        highlights: [],
+      });
+    });
+
+    expect(await screen.findByText(/pause recommandée/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /faire une pause de 5 min/i }));
+
+    // Le serveur doit l'apprendre : c'est lui qui suspend sa dérive d'attention.
+    const sent = FakeWebSocket.last?.sent.map((raw) => JSON.parse(raw)) ?? [];
+    expect(sent).toContainEqual({ type: "pause", minutes: 5 });
+    // Et le décompte tourne, à la durée annoncée par le serveur.
+    expect(screen.getByRole("timer")).toHaveTextContent("05:00");
+  });
+
+  // Le conseil de régulation de séance était produit par le modèle, validé par
+  // le schéma… et jeté par le routeur. Il s'affiche avec la question.
+  it("affiche le conseil de séance attaché à une question", async () => {
+    await renderOpenPanel();
+    await act(async () => {
+      FakeWebSocket.last?.emit({
+        type: "qa_question",
+        question: "Que retiens-tu de ce passage ?",
+        question_type: "open",
+        choices: null,
+        mask: null,
+        session_hint: "Ton attention baisse : fais une pause courte avant de continuer.",
+      });
+    });
+
+    expect(await screen.findByText(/fais une pause courte/i)).toBeInTheDocument();
+  });
+
   it("signale le passage caché d'un rappel libre", async () => {
     await renderOpenPanel();
     await act(async () => {
